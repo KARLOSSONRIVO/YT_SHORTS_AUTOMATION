@@ -1,0 +1,17 @@
+services:
+  python-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yt-shorts-python-worker
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./media:/media
+      - ./uploads:/app/uploads
+    environment:
+      PY_WORKER_APP_ENV: development
+      PY_WORKER_LOG_LEVEL: INFO
+      PY_WORKER_ENABLE_DOCS: "true"
+      PY_WORKER_WHISPER_MODEL_SIZE: base
+    restart: unless-stopped

@@ -1,0 +1,26 @@
+[project]
+name = "yt-shorts-python-worker"
+version = "0.1.0"
+description = "Internal Python worker for transcription, clip analysis, and subtitle generation."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "python-multipart>=0.0.9",
+  "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+media = [
+  "faster-whisper>=1.0.0",
+  "librosa>=0.10.2",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
