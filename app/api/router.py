@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.routes.analyze import router as analyze_router
+from app.api.routes.faceless_video import router as faceless_video_router
 from app.api.routes.health import router as health_router
 from app.api.routes.render import router as render_router
 from app.api.routes.subtitles import router as subtitles_router
@@ -14,3 +15,4 @@ api_router.include_router(analyze_router, tags=["analysis"])
 api_router.include_router(render_router, tags=["render"])
 api_router.include_router(subtitles_router, tags=["subtitles"])
 api_router.include_router(workflow_router, tags=["workflow"])
+api_router.include_router(faceless_video_router, tags=["faceless-video"])
