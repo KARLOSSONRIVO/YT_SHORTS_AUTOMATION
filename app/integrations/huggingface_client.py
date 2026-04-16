@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 from huggingface_hub import InferenceClient
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, PaymentRequiredError
 
 
 class HuggingFaceClient:
@@ -62,6 +62,10 @@ class HuggingFaceClient:
         try:
             image = self.inference_client.text_to_image(prompt=prompt, model=model)
         except Exception as exc:
+            if _is_payment_required(exc):
+                raise PaymentRequiredError(
+                    f"Hugging Face image model requires a paid plan (HTTP 402): {exc}"
+                ) from exc
             raise IntegrationError(f"Hugging Face text-to-image failed: {exc}") from exc
 
         buffer = BytesIO()
@@ -235,3 +239,17 @@ class HuggingFaceClient:
             return {"text": value}
 
         raise IntegrationError(f"Unexpected Hugging Face speech-to-text response: {value}")
+
+
+def _is_payment_required(exc: Exception) -> bool:
+    """Return True if *exc* was caused by an HTTP 402 Payment Required response."""
+    # huggingface_hub raises HfHubHTTPError with a .response attribute
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        if status == 402:
+            return True
+    # Also check stringified message as a safety net
+    if "402" in str(exc):
+        return True
+    return False

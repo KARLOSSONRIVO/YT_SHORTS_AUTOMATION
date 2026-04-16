@@ -10,3 +10,8 @@ kokoro>=0.9.4
 soundfile>=0.12.1
 faster-whisper>=1.0.0
 librosa>=0.10.2
+
+# Local SDXL image generation
+diffusers>=0.30.0
+accelerate>=0.33.0
+torch>=2.3.0

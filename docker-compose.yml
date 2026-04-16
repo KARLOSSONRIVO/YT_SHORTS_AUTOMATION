@@ -12,12 +12,20 @@ services:
       - ./media:/media
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
-      - ../models:/models:ro
+      - ../models:/models:ro        # All local AI model weights
     environment:
       PY_WORKER_APP_ENV: development
       PY_WORKER_LOG_LEVEL: INFO
       PY_WORKER_ENABLE_DOCS: "true"
       PY_WORKER_UPLOAD_DIR: /app/uploads
       PY_WORKER_OUTPUT_DIR: /app/outputs
+      # Local model paths (resolved inside the container via the volume above)
       PY_WORKER_TTS_MODEL_PATH: /models/kokoro
+      PY_WORKER_IMAGE_MODEL_PATH: /models/sdxl
+      # Route LLM calls to Ollama running on the host machine
+      PY_WORKER_USE_OLLAMA_FOR_LLM: "true"
+      PY_WORKER_OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
+      PY_WORKER_OLLAMA_LLM_MODEL: qwen3.5:4b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux host support (Docker Desktop handles this automatically on Windows/Mac)
     restart: unless-stopped

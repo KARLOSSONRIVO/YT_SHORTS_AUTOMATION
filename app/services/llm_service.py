@@ -1,8 +1,8 @@
 import json
 import re
+from typing import Any
 
 from app.core.exceptions import IntegrationError
-from app.integrations.huggingface_client import HuggingFaceClient
 from app.schemas.faceless_video import (
     FacelessScene,
     ScriptGenerationRequest,
@@ -14,17 +14,17 @@ class LLMService:
     def __init__(
         self,
         *,
-        huggingface_client: HuggingFaceClient,
+        llm_client: Any,
         model: str,
         allow_placeholder_generation: bool = False,
     ) -> None:
-        self.huggingface_client = huggingface_client
+        self.llm_client = llm_client
         self.model = model
         self.allow_placeholder_generation = allow_placeholder_generation
 
     def generate_story_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
         try:
-            generated = self.huggingface_client.generate_text(
+            generated = self.llm_client.generate_text(
                 model=self.model,
                 prompt=self._build_prompt(payload),
                 max_new_tokens=2200,
@@ -114,17 +114,24 @@ Rules:
         )
 
     def _extract_json(self, generated_text: str) -> dict:
-        cleaned = generated_text.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
-            cleaned = re.sub(r"```$", "", cleaned).strip()
+        # Strip <think>...</think> blocks emitted by reasoning models (e.g. Qwen3.5, DeepSeek-R1)
+        cleaned = re.sub(r"<think>.*?</think>", "", generated_text, flags=re.DOTALL).strip()
+
+        # Strip markdown code fences (```json ... ```)
+        if "```" in cleaned:
+            cleaned = re.sub(r"```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r"```", "", cleaned).strip()
 
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError:
+            # Last resort: grab the first {...} block in the text
             match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
             if not match:
-                raise IntegrationError("The LLM response did not contain a JSON object.")
+                raise IntegrationError(
+                    f"The LLM response did not contain a JSON object. "
+                    f"Raw response (first 500 chars): {generated_text[:500]}"
+                )
             data = json.loads(match.group(0))
 
         if not isinstance(data, dict):

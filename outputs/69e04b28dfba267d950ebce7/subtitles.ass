@@ -1,0 +1,76 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Bebas Neue,156,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,5,0,5,60,60,220,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.24,0:00:01.00,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}CENTURIES{\rDefault}
+Dialogue: 0,0:00:01.00,0:00:01.70,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}AGO,{\rDefault}
+Dialogue: 0,0:00:01.70,0:00:01.78,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}A{\rDefault}
+Dialogue: 0,0:00:01.78,0:00:02.30,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}CIVILIZATION{\rDefault}
+Dialogue: 0,0:00:02.30,0:00:03.16,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THRIVED{\rDefault}
+Dialogue: 0,0:00:03.16,0:00:03.28,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}WHERE{\rDefault}
+Dialogue: 0,0:00:03.28,0:00:03.42,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:03.42,0:00:03.76,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}DEEPEST{\rDefault}
+Dialogue: 0,0:00:03.76,0:00:04.20,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}BLUE{\rDefault}
+Dialogue: 0,0:00:04.20,0:00:04.52,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}MEETS{\rDefault}
+Dialogue: 0,0:00:04.52,0:00:04.74,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:04.74,0:00:05.04,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}LIGHT.{\rDefault}
+Dialogue: 0,0:00:05.66,0:00:05.92,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THEY{\rDefault}
+Dialogue: 0,0:00:05.92,0:00:06.16,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}BUILT{\rDefault}
+Dialogue: 0,0:00:06.16,0:00:06.30,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}A{\rDefault}
+Dialogue: 0,0:00:06.30,0:00:06.64,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}PARADISE{\rDefault}
+Dialogue: 0,0:00:06.64,0:00:06.94,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}OF{\rDefault}
+Dialogue: 0,0:00:06.94,0:00:07.24,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}GOLD{\rDefault}
+Dialogue: 0,0:00:07.24,0:00:07.58,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}AND{\rDefault}
+Dialogue: 0,0:00:07.58,0:00:07.86,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}MARBLE{\rDefault}
+Dialogue: 0,0:00:07.86,0:00:08.42,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}HIDDEN{\rDefault}
+Dialogue: 0,0:00:08.42,0:00:08.64,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}FROM{\rDefault}
+Dialogue: 0,0:00:08.64,0:00:08.78,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:08.78,0:00:08.94,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}REST{\rDefault}
+Dialogue: 0,0:00:08.94,0:00:09.12,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}OF{\rDefault}
+Dialogue: 0,0:00:09.12,0:00:09.20,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:09.20,0:00:09.60,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}WORLD.{\rDefault}
+Dialogue: 0,0:00:10.20,0:00:10.42,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}BUT{\rDefault}
+Dialogue: 0,0:00:10.42,0:00:10.54,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THEIR{\rDefault}
+Dialogue: 0,0:00:10.54,0:00:10.94,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}POWER{\rDefault}
+Dialogue: 0,0:00:10.94,0:00:11.24,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}CAME{\rDefault}
+Dialogue: 0,0:00:11.24,0:00:11.38,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}AT{\rDefault}
+Dialogue: 0,0:00:11.38,0:00:11.50,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}A{\rDefault}
+Dialogue: 0,0:00:11.50,0:00:11.94,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}COST.{\rDefault}
+Dialogue: 0,0:00:12.58,0:00:13.04,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}OVERREACHING{\rDefault}
+Dialogue: 0,0:00:13.04,0:00:13.32,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}INTO{\rDefault}
+Dialogue: 0,0:00:13.32,0:00:13.46,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:13.46,0:00:14.20,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}HEAVENS,{\rDefault}
+Dialogue: 0,0:00:14.20,0:00:14.28,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THEY{\rDefault}
+Dialogue: 0,0:00:14.28,0:00:14.46,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}DREW{\rDefault}
+Dialogue: 0,0:00:14.46,0:00:14.66,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:14.66,0:00:14.86,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}WRATH{\rDefault}
+Dialogue: 0,0:00:14.86,0:00:15.08,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}OF{\rDefault}
+Dialogue: 0,0:00:15.08,0:00:15.18,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:15.18,0:00:15.46,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}GODS.{\rDefault}
+Dialogue: 0,0:00:16.38,0:00:16.52,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}A{\rDefault}
+Dialogue: 0,0:00:16.52,0:00:16.88,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}GREAT{\rDefault}
+Dialogue: 0,0:00:16.88,0:00:17.28,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}TSUNAMI{\rDefault}
+Dialogue: 0,0:00:17.28,0:00:17.88,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}SWALLOWED{\rDefault}
+Dialogue: 0,0:00:17.88,0:00:18.16,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:18.16,0:00:18.38,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}CITY{\rDefault}
+Dialogue: 0,0:00:18.38,0:00:18.70,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}WHOLE.{\rDefault}
+Dialogue: 0,0:00:19.56,0:00:20.08,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}NOW,{\rDefault}
+Dialogue: 0,0:00:20.08,0:00:20.38,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}ONLY{\rDefault}
+Dialogue: 0,0:00:20.38,0:00:20.70,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}WHISPERS{\rDefault}
+Dialogue: 0,0:00:20.70,0:00:21.16,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}REMAIN{\rDefault}
+Dialogue: 0,0:00:21.16,0:00:21.96,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}URGING{\rDefault}
+Dialogue: 0,0:00:21.96,0:00:22.18,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}US{\rDefault}
+Dialogue: 0,0:00:22.18,0:00:22.30,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}TO{\rDefault}
+Dialogue: 0,0:00:22.30,0:00:22.54,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}FIND{\rDefault}
+Dialogue: 0,0:00:22.54,0:00:22.74,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}WHAT{\rDefault}
+Dialogue: 0,0:00:22.74,0:00:23.06,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}SANK{\rDefault}
+Dialogue: 0,0:00:23.06,0:00:23.40,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}INTO{\rDefault}
+Dialogue: 0,0:00:23.40,0:00:23.54,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}THE{\rDefault}
+Dialogue: 0,0:00:23.54,0:00:23.82,Default,,0,0,0,,{\c&H004AD5FF\b1\fscx118\fscy118\bord6\fad(45,70)}DARK.{\rDefault}

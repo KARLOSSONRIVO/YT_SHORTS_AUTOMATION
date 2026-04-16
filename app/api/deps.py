@@ -4,6 +4,7 @@ from app.core.config import Settings, get_settings
 from app.integrations.ffprobe_client import FFprobeClient
 from app.integrations.ffmpeg_client import FFmpegClient
 from app.integrations.huggingface_client import HuggingFaceClient
+from app.integrations.ollama_client import OllamaClient
 from app.integrations.whisper_client import WhisperClient
 from app.pipelines.highlight_pipeline import HighlightPipeline
 from app.pipelines.subtitle_pipeline import SubtitlePipeline
@@ -131,10 +132,25 @@ def get_render_service() -> RenderService:
 
 
 @lru_cache
+def get_ollama_client() -> OllamaClient:
+    settings = get_settings()
+    return OllamaClient(
+        base_url=settings.ollama_base_url,
+        timeout_seconds=settings.hf_timeout_seconds,
+    )
+
+
+@lru_cache
 def get_llm_service() -> LLMService:
     settings = get_settings()
+    if settings.use_ollama_for_llm:
+        return LLMService(
+            llm_client=get_ollama_client(),
+            model=settings.ollama_llm_model,
+            allow_placeholder_generation=settings.allow_placeholder_generation,
+        )
     return LLMService(
-        huggingface_client=get_huggingface_client(),
+        llm_client=get_huggingface_client(),
         model=settings.llm_model,
         allow_placeholder_generation=settings.allow_placeholder_generation,
     )
@@ -159,6 +175,7 @@ def get_faceless_subtitle_service() -> FacelessSubtitleService:
     return FacelessSubtitleService(
         output_dir=settings.output_dir,
         huggingface_client=get_huggingface_client(),
+        whisper_client=get_whisper_client(),
         whisper_model=settings.whisper_hf_model,
         allow_placeholder_generation=settings.allow_placeholder_generation,
     )
@@ -172,6 +189,7 @@ def get_image_service() -> ImageService:
         ffmpeg_client=get_ffmpeg_client(),
         output_dir=settings.output_dir,
         model=settings.image_model,
+        model_path=settings.image_model_path,
         allow_placeholder_generation=settings.allow_placeholder_generation,
     )
 

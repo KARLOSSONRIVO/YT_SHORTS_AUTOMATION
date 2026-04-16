@@ -6,13 +6,13 @@ from app.schemas.transcription import TranscriptResult
 
 
 class SubtitlePreferences(BaseModel):
-    font_family: str = "Montserrat ExtraBold"
-    font_size: int = 64
+    font_family: str = "Bebas Neue"
+    font_size: int = 92
     fill_color: str = "#FFFFFF"
     stroke_color: str = "#000000"
-    highlight_color: str = "#FFD54A"
-    position: str = "bottom_center"
-    max_chars_per_line: int = 28
+    highlight_color: str = "#FFFFFF"
+    position: str = "middle_center"
+    max_chars_per_line: int = 18
     max_lines: int = 2
 
 
