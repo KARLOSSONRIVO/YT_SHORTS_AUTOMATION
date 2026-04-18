@@ -48,6 +48,27 @@ class AudioGenerationResponse(BaseModel):
     voice: str
 
 
+class VoiceOption(BaseModel):
+    voice: str
+    label: str
+    language: str
+    gender: str
+    quality_grade: str | None = None
+    sample_text: str
+
+
+class VoicePreviewRequest(BaseModel):
+    voice: str
+    text: str | None = None
+
+
+class VoicePreviewResponse(BaseModel):
+    voice: str
+    audio_path: str
+    audio_url: str
+    sample_text: str
+
+
 class SubtitleCue(BaseModel):
     index: int
     start: float

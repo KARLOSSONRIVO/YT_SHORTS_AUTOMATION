@@ -1,4 +1,0 @@
-file '/app/outputs/69e0545c430a49b799cdce67/scene_clips/scene_01.mp4'
-file '/app/outputs/69e0545c430a49b799cdce67/scene_clips/scene_02.mp4'
-file '/app/outputs/69e0545c430a49b799cdce67/scene_clips/scene_03.mp4'
-file '/app/outputs/69e0545c430a49b799cdce67/scene_clips/scene_04.mp4'

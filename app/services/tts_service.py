@@ -1,13 +1,16 @@
 from pathlib import Path
+import re
 import wave
 
 from app.core.exceptions import IntegrationError
 from app.integrations.huggingface_client import HuggingFaceClient
-from app.schemas.faceless_video import AudioGenerationRequest, AudioGenerationResponse
+from app.schemas.faceless_video import AudioGenerationRequest, AudioGenerationResponse, VoiceOption, VoicePreviewResponse
 
 
 class TTSService:
     WORDS_PER_SECOND = 2.35
+    DEFAULT_PREVIEW_TEXT = "In the last few months, this faceless channel has exploded."
+    UNSUPPORTED_LANGUAGE_CODES = {"j"}
 
     def __init__(
         self,
@@ -26,8 +29,10 @@ class TTSService:
         self.model_path = Path(model_path) if model_path else None
         self.allow_placeholder_generation = allow_placeholder_generation
         self._kokoro_pipelines: dict[str, object] = {}
+        self._voice_metadata_cache: dict[str, dict[str, str]] | None = None
 
     def generate_narration(self, payload: AudioGenerationRequest) -> AudioGenerationResponse:
+        self._ensure_supported_voice(payload.voice)
         job_dir = self.output_dir / payload.job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         output_path = job_dir / "narration.wav"
@@ -61,6 +66,62 @@ class TTSService:
             audio_url=f"/outputs/{payload.job_id}/{output_path.name}",
             duration_seconds=duration,
             voice=payload.voice,
+        )
+
+    def list_available_voices(self) -> list[VoiceOption]:
+        if not self.model_path:
+            return []
+
+        voices_dir = self.model_path / "voices"
+        if not voices_dir.exists():
+            return []
+
+        metadata = self._voice_metadata()
+        voices: list[VoiceOption] = []
+
+        for voice_path in sorted(voices_dir.glob("*.pt")):
+            voice_name = voice_path.stem
+            if self._lang_code_for_voice(voice_name) in self.UNSUPPORTED_LANGUAGE_CODES:
+                continue
+            voice_metadata = metadata.get(voice_name, {})
+            voices.append(
+                VoiceOption(
+                    voice=voice_name,
+                    label=self._display_name_for_voice(voice_name),
+                    language=voice_metadata.get("language", self._language_name_for_voice(voice_name)),
+                    gender=self._gender_name_for_voice(voice_name),
+                    quality_grade=voice_metadata.get("quality_grade"),
+                    sample_text=self._sample_text_for_voice(voice_name),
+                )
+            )
+
+        return voices
+
+    def generate_voice_preview(self, voice: str, text: str | None = None) -> VoicePreviewResponse:
+        if not self._has_local_kokoro():
+            raise IntegrationError("Local Kokoro voice previews require the downloaded model and voices folder.")
+
+        preview_dir = self.output_dir / "voice-previews"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        voice_name = voice.removesuffix(".pt")
+        self._ensure_supported_voice(voice_name)
+        output_path = preview_dir / f"{voice_name}.wav"
+        sample_text = (text or self._sample_text_for_voice(voice_name)).strip()
+
+        payload = AudioGenerationRequest(
+            job_id="voice-previews",
+            project_id="voice-previews",
+            narration=sample_text,
+            voice=voice_name,
+            speaking_rate=0.84,
+        )
+        self._generate_local_kokoro(payload=payload, output_path=output_path)
+
+        return VoicePreviewResponse(
+            voice=voice_name,
+            audio_path=str(output_path.resolve()),
+            audio_url=f"/outputs/voice-previews/{output_path.name}",
+            sample_text=sample_text,
         )
 
     def _has_local_kokoro(self) -> bool:
@@ -211,3 +272,93 @@ class TTSService:
                 return round(frame_count / float(frame_rate), 2)
         except wave.Error:
             return None
+
+    def _voice_metadata(self) -> dict[str, dict[str, str]]:
+        if self._voice_metadata_cache is not None:
+            return self._voice_metadata_cache
+
+        if not self.model_path:
+            self._voice_metadata_cache = {}
+            return self._voice_metadata_cache
+
+        voices_md_path = self.model_path / "VOICES.md"
+        if not voices_md_path.exists():
+            self._voice_metadata_cache = {}
+            return self._voice_metadata_cache
+
+        metadata: dict[str, dict[str, str]] = {}
+        current_language: str | None = None
+
+        for raw_line in voices_md_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw_line.strip()
+            if line.startswith("### "):
+                current_language = line.removeprefix("### ").strip()
+                continue
+            if not current_language or not line.startswith("|"):
+                continue
+            if line.startswith("| Name ") or line.startswith("| ---- "):
+                continue
+
+            columns = [column.strip() for column in line.split("|")[1:-1]]
+            if len(columns) < 5:
+                continue
+
+            voice_name = columns[0].replace("**", "").replace("\\_", "_").strip("` ")
+            if not voice_name or "_" not in voice_name:
+                continue
+
+            metadata[voice_name] = {
+                "language": current_language,
+                "quality_grade": columns[4] or "",
+            }
+
+        self._voice_metadata_cache = metadata
+        return metadata
+
+    def _display_name_for_voice(self, voice: str) -> str:
+        base_name = voice.removesuffix(".pt")
+        slug = base_name.split("_", 1)[1] if "_" in base_name else base_name
+        return " ".join(part.capitalize() for part in slug.split("_"))
+
+    def _gender_name_for_voice(self, voice: str) -> str:
+        base_name = voice.removesuffix(".pt")
+        prefix = base_name[:2]
+        if len(prefix) >= 2 and prefix[1] == "f":
+            return "Female"
+        if len(prefix) >= 2 and prefix[1] == "m":
+            return "Male"
+        return "Unknown"
+
+    def _language_name_for_voice(self, voice: str) -> str:
+        lang_code = self._lang_code_for_voice(voice)
+        return {
+            "a": "American English",
+            "b": "British English",
+            "e": "Spanish",
+            "f": "French",
+            "h": "Hindi",
+            "i": "Italian",
+            "j": "Japanese",
+            "p": "Brazilian Portuguese",
+            "z": "Mandarin Chinese",
+        }.get(lang_code, "American English")
+
+    def _sample_text_for_voice(self, voice: str) -> str:
+        lang_code = self._lang_code_for_voice(voice)
+        samples = {
+            "a": "In the last few months, this faceless channel has exploded.",
+            "b": "In the last few months, this faceless channel has exploded.",
+            "e": "En los ultimos meses, este canal sin rostro ha crecido muchisimo.",
+            "f": "Ces derniers mois, cette chaine sans visage a vraiment explose.",
+            "h": "Pichhle kuchh mahino mein, yeh faceless channel bahut tezi se bada hai.",
+            "i": "Negli ultimi mesi, questo canale senza volto e cresciuto tantissimo.",
+            "j": "Kono suukagetsu de, kono faceless channel wa kyukoushou shimashita.",
+            "p": "Nos ultimos meses, este canal sem rosto cresceu muito rapido.",
+            "z": "Zai guoqu ji ge yue li, zhe ge wulian pindao kuaisu baohong le.",
+        }
+        sample_text = samples.get(lang_code, self.DEFAULT_PREVIEW_TEXT)
+        return re.sub(r"\s+", " ", sample_text).strip()
+
+    def _ensure_supported_voice(self, voice: str) -> None:
+        if self._lang_code_for_voice(voice) in self.UNSUPPORTED_LANGUAGE_CODES:
+            raise IntegrationError("Japanese Kokoro voices are currently unavailable in this project.")

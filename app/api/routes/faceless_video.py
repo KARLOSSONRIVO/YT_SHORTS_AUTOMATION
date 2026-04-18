@@ -18,6 +18,9 @@ from app.schemas.faceless_video import (
     StoryRenderResponse,
     StorySubtitleGenerationRequest,
     StorySubtitleGenerationResponse,
+    VoiceOption,
+    VoicePreviewRequest,
+    VoicePreviewResponse,
 )
 from app.services.faceless_subtitle_service import FacelessSubtitleService
 from app.services.image_service import ImageService
@@ -26,6 +29,21 @@ from app.services.story_render_service import StoryRenderService
 from app.services.tts_service import TTSService
 
 router = APIRouter(prefix="/faceless")
+
+
+@router.get("/voices", response_model=list[VoiceOption])
+async def list_voices(
+    tts_service: TTSService = Depends(get_tts_service),
+) -> list[VoiceOption]:
+    return tts_service.list_available_voices()
+
+
+@router.post("/preview-voice", response_model=VoicePreviewResponse)
+async def preview_voice(
+    payload: VoicePreviewRequest,
+    tts_service: TTSService = Depends(get_tts_service),
+) -> VoicePreviewResponse:
+    return tts_service.generate_voice_preview(payload.voice, payload.text)
 
 
 @router.post("/generate-script", response_model=ScriptGenerationResponse)

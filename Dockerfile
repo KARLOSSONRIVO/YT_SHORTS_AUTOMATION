@@ -7,12 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg espeak-ng \
+    && apt-get install -y --no-install-recommends ffmpeg espeak-ng build-essential cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
+    && pip install -r requirements.txt \
+    && python -m unidic download
 
 COPY app ./app
 COPY pyproject.toml README.md ./
