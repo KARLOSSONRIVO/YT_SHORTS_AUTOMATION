@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
+import math
+import random
 
 from app.core.exceptions import IntegrationError
 from app.schemas.analysis import ClipCandidate
@@ -20,6 +22,9 @@ class WordBlock:
 class RenderService:
     WORD_LEAD_IN_SECONDS = 0.35
     VIDEO_ZOOM_FACTOR = 1.10
+    MUSIC_MIN_START_OFFSET_SECONDS = 4.0
+    MUSIC_MAX_START_OFFSET_SECONDS = 8.0
+    MUSIC_CHUNK_DURATION_SECONDS = 10.0
 
     def __init__(self, ffmpeg_client, output_dir: str) -> None:
         self.ffmpeg_client = ffmpeg_client
@@ -400,3 +405,106 @@ class RenderService:
             return "&H00FFFFFF"
         rr, gg, bb = cleaned[0:2], cleaned[2:4], cleaned[4:6]
         return f"&H00{bb}{gg}{rr}"
+
+    def mix_audio_with_music(
+        self,
+        *,
+        narration_path: Path,
+        music_path: Path,
+        output_path: Path,
+        ducking: bool = True,
+        music_volume: float = 0.15,
+    ) -> None:
+        if not music_path.exists():
+            raise IntegrationError("Background music track was not found.")
+
+        music_volume = min(max(music_volume, 0.0), 1.0)
+        narration_duration = self._audio_duration(narration_path)
+        if narration_duration is None:
+            raise IntegrationError("Narration duration could not be determined for music mixing.")
+
+        chunk_count = max(math.ceil(narration_duration / self.MUSIC_CHUNK_DURATION_SECONDS) + 1, 2)
+        music_inputs = self._music_chunk_inputs(
+            music_path=music_path,
+            chunk_count=chunk_count,
+            chunk_duration=self.MUSIC_CHUNK_DURATION_SECONDS,
+        )
+        narration_filter = "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[narr]"
+        music_segments = [
+            f"[{index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[m{index}]"
+            for index in range(1, chunk_count + 1)
+        ]
+        concat_inputs = "".join(f"[m{index}]" for index in range(1, chunk_count + 1))
+        music_filter = (
+            ";".join(music_segments)
+            + ";"
+            + f"{concat_inputs}concat=n={chunk_count}:v=0:a=1,"
+            f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS,volume={music_volume}[music]"
+        )
+
+        if ducking:
+            filter_complex = (
+                f"{narration_filter};"
+                f"{music_filter};"
+                "[music][narr]sidechaincompress=threshold=0.02:ratio=6:attack=20:release=250[ducked];"
+                "[narr][ducked]amix=inputs=2:duration=first:dropout_transition=0,"
+                "alimiter=limit=0.95[aout]"
+            )
+        else:
+            filter_complex = (
+                f"{narration_filter};"
+                f"{music_filter};"
+                "[narr][music]amix=inputs=2:duration=first:dropout_transition=0,"
+                "alimiter=limit=0.95[aout]"
+            )
+
+        self.ffmpeg_client.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(narration_path),
+                *music_inputs,
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[aout]",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ]
+        )
+
+    def _random_music_start_offset(self) -> float:
+        return round(
+            random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
+            2,
+        )
+
+    def _audio_duration(self, audio_path: Path) -> float | None:
+        try:
+            import wave
+
+            with wave.open(str(audio_path), "rb") as audio_file:
+                frame_count = audio_file.getnframes()
+                frame_rate = audio_file.getframerate()
+                if frame_rate <= 0:
+                    return None
+                return round(frame_count / float(frame_rate), 2)
+        except (FileNotFoundError, wave.Error):
+            return None
+
+    def _music_chunk_inputs(self, *, music_path: Path, chunk_count: int, chunk_duration: float) -> list[str]:
+        inputs: list[str] = []
+        for _ in range(chunk_count):
+            inputs.extend(
+                [
+                    "-ss",
+                    str(self._random_music_start_offset()),
+                    "-t",
+                    str(chunk_duration),
+                    "-i",
+                    str(music_path),
+                ]
+            )
+        return inputs

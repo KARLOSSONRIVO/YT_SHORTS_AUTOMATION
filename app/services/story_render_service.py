@@ -1,4 +1,6 @@
 from pathlib import Path
+import math
+import random
 import wave
 
 from app.core.exceptions import IntegrationError, ValidationError
@@ -15,10 +17,27 @@ class StoryRenderService:
     SCENE_END_ZOOM = 1.06
     SCENE_WORK_WIDTH = 1280
     SCENE_WORK_HEIGHT = 2276
+    MUSIC_MIN_START_OFFSET_SECONDS = 4.0
+    MUSIC_MAX_START_OFFSET_SECONDS = 8.0
+    MUSIC_CHUNK_DURATION_SECONDS = 10.0
 
-    def __init__(self, ffmpeg_client, output_dir: str) -> None:
+    def __init__(
+        self,
+        ffmpeg_client,
+        output_dir: str,
+        music_service=None,
+        llm_service=None,
+        enable_background_music: bool = True,
+        default_music_volume: float = 0.15,
+        enable_audio_ducking: bool = True,
+    ) -> None:
         self.ffmpeg_client = ffmpeg_client
         self.output_dir = Path(output_dir)
+        self.music_service = music_service
+        self.llm_service = llm_service
+        self.enable_background_music = enable_background_music
+        self.default_music_volume = default_music_volume
+        self.enable_audio_ducking = enable_audio_ducking
 
     def render_story_video(self, payload: StoryRenderRequest) -> StoryRenderResponse:
         if not self.ffmpeg_client.is_available():
@@ -30,9 +49,26 @@ class StoryRenderService:
         job_dir.mkdir(parents=True, exist_ok=True)
         concat_path = job_dir / "scene_inputs.txt"
         output_path = job_dir / "faceless_story.mp4"
+        render_audio_path = payload.audio_path
         scene_clip_dir = job_dir / self.SCENE_CLIP_DIRNAME
         scene_clip_dir.mkdir(parents=True, exist_ok=True)
         audio_duration = self._audio_duration(Path(payload.audio_path))
+        music_volume = payload.music_volume if payload.music_volume is not None else self.default_music_volume
+        if self.enable_background_music and payload.use_music:
+            selected_music_path = self._select_music_for_payload(payload)
+            if selected_music_path:
+                mixed_audio_path = job_dir / "narration_with_music.wav"
+                try:
+                    self.mix_audio_with_music(
+                        narration_path=Path(payload.audio_path),
+                        music_path=Path(selected_music_path),
+                        output_path=mixed_audio_path,
+                        ducking=payload.ducking and self.enable_audio_ducking,
+                        music_volume=music_volume,
+                    )
+                    render_audio_path = str(mixed_audio_path.resolve())
+                except IntegrationError:
+                    render_audio_path = payload.audio_path
 
         subtitle_durations = None
         if payload.subtitles_path:
@@ -89,7 +125,7 @@ class StoryRenderService:
             "-i",
             str(concat_path),
             "-i",
-            payload.audio_path,
+            render_audio_path,
             "-vf",
             ",".join(filters),
             "-r",
@@ -321,3 +357,117 @@ class StoryRenderService:
                 return round(frame_count / float(frame_rate), 2)
         except (FileNotFoundError, wave.Error):
             return None
+
+    def mix_audio_with_music(
+        self,
+        *,
+        narration_path: Path,
+        music_path: Path,
+        output_path: Path,
+        ducking: bool = True,
+        music_volume: float = 0.15,
+    ) -> None:
+        if not music_path.exists():
+            raise IntegrationError("Background music track was not found.")
+
+        music_volume = min(max(music_volume, 0.0), 1.0)
+        narration_duration = self._audio_duration(narration_path)
+        if narration_duration is None:
+            raise IntegrationError("Narration duration could not be determined for music mixing.")
+
+        chunk_count = max(math.ceil(narration_duration / self.MUSIC_CHUNK_DURATION_SECONDS) + 1, 2)
+        music_inputs = self._music_chunk_inputs(
+            music_path=music_path,
+            chunk_count=chunk_count,
+            chunk_duration=self.MUSIC_CHUNK_DURATION_SECONDS,
+        )
+        narration_filter = "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[narr]"
+        music_segments = [
+            f"[{index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[m{index}]"
+            for index in range(1, chunk_count + 1)
+        ]
+        concat_inputs = "".join(f"[m{index}]" for index in range(1, chunk_count + 1))
+        music_filter = (
+            ";".join(music_segments)
+            + ";"
+            + f"{concat_inputs}concat=n={chunk_count}:v=0:a=1,"
+            f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS,volume={music_volume}[music]"
+        )
+
+        if ducking:
+            filter_complex = (
+                f"{narration_filter};"
+                f"{music_filter};"
+                "[music][narr]sidechaincompress=threshold=0.02:ratio=6:attack=20:release=250[ducked];"
+                "[narr][ducked]amix=inputs=2:duration=first:dropout_transition=0,"
+                "alimiter=limit=0.95[aout]"
+            )
+        else:
+            filter_complex = (
+                f"{narration_filter};"
+                f"{music_filter};"
+                "[narr][music]amix=inputs=2:duration=first:dropout_transition=0,"
+                "alimiter=limit=0.95[aout]"
+            )
+
+        self.ffmpeg_client.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(narration_path),
+                *music_inputs,
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[aout]",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ]
+        )
+
+    def _random_music_start_offset(self) -> float:
+        return round(
+            random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
+            2,
+        )
+
+    def _music_chunk_inputs(self, *, music_path: Path, chunk_count: int, chunk_duration: float) -> list[str]:
+        inputs: list[str] = []
+        for _ in range(chunk_count):
+            inputs.extend(
+                [
+                    "-ss",
+                    str(self._random_music_start_offset()),
+                    "-t",
+                    str(chunk_duration),
+                    "-i",
+                    str(music_path),
+                ]
+            )
+        return inputs
+
+    def _select_music_for_payload(self, payload: StoryRenderRequest) -> str | None:
+        if payload.background_music_path:
+            explicit_path = Path(payload.background_music_path)
+            if explicit_path.exists():
+                return str(explicit_path.resolve())
+            return None
+
+        if self.music_service is None:
+            return None
+
+        script_text = " ".join(scene.narration for scene in payload.scenes if scene.narration).strip()
+        detected_mood = self._detect_mood(script_text) if script_text else "neutral"
+        return self.music_service.get_music_for_mood(detected_mood)
+
+    def _detect_mood(self, script: str) -> str:
+        if self.llm_service is not None and hasattr(self.llm_service, "detect_mood"):
+            try:
+                return self.llm_service.detect_mood(script)
+            except Exception:
+                pass
+        if self.music_service is not None and hasattr(self.music_service, "detect_mood"):
+            return self.music_service.detect_mood(script)
+        return "neutral"

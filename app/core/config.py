@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     tts_model_path: str | None = None
     tts_model: str = "hexgrad/Kokoro-82M"
 
+    # Background music
+    enable_background_music: bool = True
+    default_music_volume: float = 0.15
+    enable_audio_ducking: bool = True
+    music_assets_path: str = "assets/music"
+
     # Whisper (STT)
     whisper_hf_model: str = "openai/whisper-large-v3-turbo"
 

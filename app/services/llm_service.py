@@ -38,6 +38,16 @@ class LLMService:
                 raise
             raise IntegrationError(f"Hugging Face script generation failed: {exc}") from exc
 
+    def detect_mood(self, script: str) -> str:
+        normalized_script = re.sub(r"\s+", " ", script.lower())
+        if any(token in normalized_script for token in ("ghost", "terror", "dark", "fear", "haunted", "murder")):
+            return "horror"
+        if any(token in normalized_script for token in ("grief", "loss", "heartbreak", "tragedy", "tears", "lonely")):
+            return "sad"
+        if any(token in normalized_script for token in ("epic", "legend", "battle", "empire", "dramatic", "cinematic")):
+            return "cinematic"
+        return "neutral"
+
     def _build_prompt(self, payload: ScriptGenerationRequest) -> str:
         return f"""
 You generate short-form faceless story videos for YouTube Shorts and TikTok.

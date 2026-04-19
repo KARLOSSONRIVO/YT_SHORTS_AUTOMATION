@@ -16,6 +16,7 @@ from app.services.hook_scoring_service import HookScoringService
 from app.services.faceless_subtitle_service import FacelessSubtitleService
 from app.services.image_service import ImageService
 from app.services.local_media_store_service import LocalMediaStoreService
+from app.services.music_service import MusicService
 from app.services.keyword_scoring_service import KeywordScoringService
 from app.services.llm_service import LLMService
 from app.services.media_prep_service import MediaPrepService
@@ -200,7 +201,18 @@ def get_story_render_service() -> StoryRenderService:
     return StoryRenderService(
         ffmpeg_client=get_ffmpeg_client(),
         output_dir=settings.output_dir,
+        music_service=get_music_service(),
+        llm_service=get_llm_service(),
+        enable_background_music=settings.enable_background_music,
+        default_music_volume=settings.default_music_volume,
+        enable_audio_ducking=settings.enable_audio_ducking,
     )
+
+
+@lru_cache
+def get_music_service() -> MusicService:
+    settings = get_settings()
+    return MusicService(music_assets_path=settings.music_assets_path)
 
 
 def get_transcription_pipeline() -> TranscriptionPipeline:
