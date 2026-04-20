@@ -9,6 +9,7 @@ from app.schemas.faceless_video import (
     SceneImageGenerationRequest,
     SceneImageGenerationResponse,
 )
+from app.utils.output_paths import output_url, stage_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,17 @@ class ImageService:
     def generate_scene_images(
         self, payload: SceneImageGenerationRequest
     ) -> SceneImageGenerationResponse:
-        job_dir = self.output_dir / payload.job_id / "scenes"
-        job_dir.mkdir(parents=True, exist_ok=True)
+        stage_dir = stage_output_dir(
+            output_dir=self.output_dir,
+            project_title=payload.project_title,
+            project_id=payload.project_id,
+            stage_name="scenes",
+        )
+        stage_dir.mkdir(parents=True, exist_ok=True)
         images: list[GeneratedSceneImage] = []
 
         for index, scene in enumerate(payload.scenes):
-            output_path = job_dir / f"scene_{scene.scene_index:02d}.png"
+            output_path = stage_dir / f"scene_{scene.scene_index:02d}.png"
             prompt = f"{payload.visual_style}, {scene.image_prompt}, vertical 9:16, no text, no logos"
             try:
                 output_path.write_bytes(self._generate_image(prompt))
@@ -60,7 +66,7 @@ class ImageService:
                     scene_index=scene.scene_index,
                     prompt=prompt,
                     image_path=str(output_path.resolve()),
-                    image_url=f"/outputs/{payload.job_id}/scenes/{output_path.name}",
+                    image_url=output_url(output_dir=self.output_dir, file_path=output_path),
                 )
             )
 

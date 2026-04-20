@@ -5,6 +5,7 @@ import wave
 
 from app.core.exceptions import IntegrationError, ValidationError
 from app.schemas.faceless_video import StoryRenderRequest, StoryRenderResponse
+from app.utils.output_paths import output_url, stage_output_dir
 
 
 class StoryRenderService:
@@ -45,19 +46,24 @@ class StoryRenderService:
         if not payload.image_paths:
             raise ValidationError("At least one scene image is required for rendering.")
 
-        job_dir = self.output_dir / payload.job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
-        concat_path = job_dir / "scene_inputs.txt"
-        output_path = job_dir / "faceless_story.mp4"
+        stage_dir = stage_output_dir(
+            output_dir=self.output_dir,
+            project_title=payload.project_title,
+            project_id=payload.project_id,
+            stage_name="render",
+        )
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        concat_path = stage_dir / "scene_inputs.txt"
+        output_path = stage_dir / "faceless_story.mp4"
         render_audio_path = payload.audio_path
-        scene_clip_dir = job_dir / self.SCENE_CLIP_DIRNAME
+        scene_clip_dir = stage_dir / self.SCENE_CLIP_DIRNAME
         scene_clip_dir.mkdir(parents=True, exist_ok=True)
         audio_duration = self._audio_duration(Path(payload.audio_path))
         music_volume = payload.music_volume if payload.music_volume is not None else self.default_music_volume
         if self.enable_background_music and payload.use_music:
             selected_music_path = self._select_music_for_payload(payload)
             if selected_music_path:
-                mixed_audio_path = job_dir / "narration_with_music.wav"
+                mixed_audio_path = stage_dir / "narration_with_music.wav"
                 try:
                     self.mix_audio_with_music(
                         narration_path=Path(payload.audio_path),
@@ -149,7 +155,7 @@ class StoryRenderService:
             job_id=payload.job_id,
             project_id=payload.project_id,
             video_path=str(output_path.resolve()),
-            video_url=f"/outputs/{payload.job_id}/{output_path.name}",
+            video_url=output_url(output_dir=self.output_dir, file_path=output_path),
             duration_seconds=round(total_duration, 2),
         )
 

@@ -12,6 +12,7 @@ class FacelessScene(BaseModel):
 class ScriptGenerationRequest(BaseModel):
     job_id: str
     project_id: str
+    project_title: str | None = None
     topic: str
     tone: str = "dramatic"
     language: str = "en"
@@ -34,6 +35,7 @@ class ScriptGenerationResponse(BaseModel):
 class AudioGenerationRequest(BaseModel):
     job_id: str
     project_id: str
+    project_title: str | None = None
     narration: str
     voice: str = "af_sarah"
     speaking_rate: float = Field(default=0.82, gt=0)
@@ -79,6 +81,7 @@ class SubtitleCue(BaseModel):
 class StorySubtitleGenerationRequest(BaseModel):
     job_id: str
     project_id: str
+    project_title: str | None = None
     audio_path: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
 
@@ -98,6 +101,7 @@ class StorySubtitleGenerationResponse(BaseModel):
 class SceneImageGenerationRequest(BaseModel):
     job_id: str
     project_id: str
+    project_title: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
     visual_style: str = "vertical cinematic, high contrast"
 
@@ -118,6 +122,7 @@ class SceneImageGenerationResponse(BaseModel):
 class StoryRenderRequest(BaseModel):
     job_id: str
     project_id: str
+    project_title: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
     image_paths: list[str] = Field(default_factory=list)
     audio_path: str

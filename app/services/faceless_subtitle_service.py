@@ -12,6 +12,7 @@ from app.schemas.faceless_video import (
     StorySubtitleGenerationResponse,
     SubtitleCue,
 )
+from app.utils.output_paths import output_url, stage_output_dir
 
 
 @dataclass(slots=True)
@@ -58,14 +59,19 @@ class FacelessSubtitleService:
     def generate_subtitles(
         self, payload: StorySubtitleGenerationRequest
     ) -> StorySubtitleGenerationResponse:
-        job_dir = self.output_dir / payload.job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
+        stage_dir = stage_output_dir(
+            output_dir=self.output_dir,
+            project_title=payload.project_title,
+            project_id=payload.project_id,
+            stage_name="subtitles",
+        )
+        stage_dir.mkdir(parents=True, exist_ok=True)
         timed_cues = self._build_timed_cues(payload)
         cues = [SubtitleCue(index=cue.index, start=cue.start, end=cue.end, text=cue.text) for cue in timed_cues]
 
-        srt_path = job_dir / "subtitles.srt"
-        ass_path = job_dir / "subtitles.ass"
-        timestamp_json_path = job_dir / "subtitles.json"
+        srt_path = stage_dir / "subtitles.srt"
+        ass_path = stage_dir / "subtitles.ass"
+        timestamp_json_path = stage_dir / "subtitles.json"
 
         srt_path.write_text(self._to_srt(cues), encoding="utf-8")
         ass_path.write_text(self._to_ass(timed_cues), encoding="utf-8")
@@ -80,9 +86,9 @@ class FacelessSubtitleService:
             srt_path=str(srt_path.resolve()),
             ass_path=str(ass_path.resolve()),
             timestamp_json_path=str(timestamp_json_path.resolve()),
-            srt_url=f"/outputs/{payload.job_id}/{srt_path.name}",
-            ass_url=f"/outputs/{payload.job_id}/{ass_path.name}",
-            timestamp_json_url=f"/outputs/{payload.job_id}/{timestamp_json_path.name}",
+            srt_url=output_url(output_dir=self.output_dir, file_path=srt_path),
+            ass_url=output_url(output_dir=self.output_dir, file_path=ass_path),
+            timestamp_json_url=output_url(output_dir=self.output_dir, file_path=timestamp_json_path),
             subtitles=cues,
         )
 

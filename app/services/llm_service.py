@@ -11,6 +11,10 @@ from app.schemas.faceless_video import (
 
 
 class LLMService:
+    SCRIPT_MAX_ATTEMPTS = 3
+    MIN_DURATION_RATIO = 0.72
+    ESTIMATED_WORDS_PER_SECOND = 2.15
+
     def __init__(
         self,
         *,
@@ -24,13 +28,28 @@ class LLMService:
 
     def generate_story_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
         try:
-            generated = self.llm_client.generate_text(
-                model=self.model,
-                prompt=self._build_prompt(payload),
-                max_new_tokens=2200,
-                temperature=0.75,
-            )
-            return self._parse_response(payload, generated)
+            last_response: ScriptGenerationResponse | None = None
+            for attempt in range(1, self.SCRIPT_MAX_ATTEMPTS + 1):
+                generated = self.llm_client.generate_text(
+                    model=self.model,
+                    prompt=self._build_prompt(payload, attempt=attempt),
+                    max_new_tokens=2200,
+                    temperature=0.75,
+                )
+                candidate = self._parse_response(payload, generated)
+                if self._meets_duration_target(payload, candidate):
+                    return candidate
+                last_response = candidate
+
+            if last_response is not None:
+                estimated = round(self._estimate_narration_duration_seconds(last_response.narration), 1)
+                minimum = round(payload.target_duration_seconds * self.MIN_DURATION_RATIO, 1)
+                raise IntegrationError(
+                    "Generated narration is too short for the requested duration. "
+                    f"Estimated {estimated}s, expected at least {minimum}s."
+                )
+
+            raise IntegrationError("The LLM did not return a usable script.")
         except Exception as exc:
             if self.allow_placeholder_generation:
                 return self._generate_placeholder_script(payload)
@@ -48,7 +67,17 @@ class LLMService:
             return "cinematic"
         return "neutral"
 
-    def _build_prompt(self, payload: ScriptGenerationRequest) -> str:
+    def _build_prompt(self, payload: ScriptGenerationRequest, *, attempt: int = 1) -> str:
+        target_word_count = max(round(payload.target_duration_seconds * self.ESTIMATED_WORDS_PER_SECOND), 45)
+        retry_instruction = ""
+        if attempt > 1:
+            retry_instruction = (
+                "\nIMPORTANT RETRY INSTRUCTION:\n"
+                f"- The previous attempt was too short for {payload.target_duration_seconds} seconds.\n"
+                f"- Make the narration noticeably fuller and closer to {target_word_count} spoken words.\n"
+                "- Add meaningful detail to every scene instead of shortening transitions.\n"
+            )
+
         return f"""
 You generate short-form faceless story videos for YouTube Shorts and TikTok.
 Return only valid JSON. Do not wrap it in markdown.
@@ -74,15 +103,18 @@ Topic: {payload.topic}
 Tone: {payload.tone}
 Language: {payload.language}
 Target duration seconds: {payload.target_duration_seconds}
+Approximate target spoken word count: {target_word_count}
 Visual style preset: {payload.style_preset}
 Audience: {payload.audience or "general short-form viewers"}
 
 Rules:
 - Create 3 to 8 scenes.
 - Keep every scene narration concise and spoken aloud naturally.
+- Make the full narration long enough to fill roughly {payload.target_duration_seconds} seconds of voice-over.
 - Image prompts must describe visual backgrounds only, with no visible text or logos.
 - The total scene durations should be close to the target duration.
 - Return JSON only.
+{retry_instruction}
 """.strip()
 
     def _parse_response(
@@ -122,6 +154,21 @@ Rules:
             image_prompts=[scene.image_prompt for scene in scenes],
             caption_text=caption_text,
         )
+
+    def _estimate_narration_duration_seconds(self, narration: str) -> float:
+        words = re.findall(r"\b[\w']+\b", narration)
+        if not words:
+            return 0.0
+        return len(words) / self.ESTIMATED_WORDS_PER_SECOND
+
+    def _meets_duration_target(
+        self,
+        payload: ScriptGenerationRequest,
+        response: ScriptGenerationResponse,
+    ) -> bool:
+        estimated_duration = self._estimate_narration_duration_seconds(response.narration)
+        minimum_duration = payload.target_duration_seconds * self.MIN_DURATION_RATIO
+        return estimated_duration >= minimum_duration
 
     def _extract_json(self, generated_text: str) -> dict:
         # Strip <think>...</think> blocks emitted by reasoning models (e.g. Qwen3.5, DeepSeek-R1)

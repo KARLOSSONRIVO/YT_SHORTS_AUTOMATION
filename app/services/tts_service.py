@@ -5,6 +5,7 @@ import wave
 from app.core.exceptions import IntegrationError
 from app.integrations.huggingface_client import HuggingFaceClient
 from app.schemas.faceless_video import AudioGenerationRequest, AudioGenerationResponse, VoiceOption, VoicePreviewResponse
+from app.utils.output_paths import output_url, stage_output_dir
 
 
 class TTSService:
@@ -33,9 +34,14 @@ class TTSService:
 
     def generate_narration(self, payload: AudioGenerationRequest) -> AudioGenerationResponse:
         self._ensure_supported_voice(payload.voice)
-        job_dir = self.output_dir / payload.job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
-        output_path = job_dir / "narration.wav"
+        stage_dir = stage_output_dir(
+            output_dir=self.output_dir,
+            project_title=payload.project_title,
+            project_id=payload.project_id,
+            stage_name="audio",
+        )
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        output_path = stage_dir / "narration.wav"
         duration = self._estimate_duration(payload)
 
         try:
@@ -47,7 +53,7 @@ class TTSService:
                     text=payload.narration,
                     voice=payload.voice,
                 )
-                raw_path = job_dir / "narration_hf_audio"
+                raw_path = stage_dir / "narration_hf_audio"
                 raw_path.write_bytes(audio_content)
                 self._normalize_audio(raw_path=raw_path, output_path=output_path)
         except Exception as exc:
@@ -63,7 +69,7 @@ class TTSService:
             job_id=payload.job_id,
             project_id=payload.project_id,
             audio_path=str(output_path.resolve()),
-            audio_url=f"/outputs/{payload.job_id}/{output_path.name}",
+            audio_url=output_url(output_dir=self.output_dir, file_path=output_path),
             duration_seconds=duration,
             voice=payload.voice,
         )
