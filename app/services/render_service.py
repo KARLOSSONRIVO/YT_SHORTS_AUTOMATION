@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pathlib import Path
-import math
 import random
 
 from app.core.exceptions import IntegrationError
@@ -22,10 +21,8 @@ class WordBlock:
 class RenderService:
     WORD_LEAD_IN_SECONDS = 0.35
     VIDEO_ZOOM_FACTOR = 1.10
-    MUSIC_MIN_START_OFFSET_SECONDS = 4.0
-    MUSIC_MAX_START_OFFSET_SECONDS = 8.0
-    MUSIC_CHUNK_DURATION_SECONDS = 10.0
-
+    MUSIC_MIN_START_OFFSET_SECONDS = 10.0
+    MUSIC_MAX_START_OFFSET_SECONDS = 15.0
     def __init__(self, ffmpeg_client, output_dir: str) -> None:
         self.ffmpeg_client = ffmpeg_client
         self.output_dir = Path(output_dir)
@@ -422,24 +419,16 @@ class RenderService:
         narration_duration = self._audio_duration(narration_path)
         if narration_duration is None:
             raise IntegrationError("Narration duration could not be determined for music mixing.")
-
-        chunk_count = max(math.ceil(narration_duration / self.MUSIC_CHUNK_DURATION_SECONDS) + 1, 2)
-        music_inputs = self._music_chunk_inputs(
-            music_path=music_path,
-            chunk_count=chunk_count,
-            chunk_duration=self.MUSIC_CHUNK_DURATION_SECONDS,
+        music_start_offset = round(
+            random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
+            2,
         )
         narration_filter = "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[narr]"
-        music_segments = [
-            f"[{index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[m{index}]"
-            for index in range(1, chunk_count + 1)
-        ]
-        concat_inputs = "".join(f"[m{index}]" for index in range(1, chunk_count + 1))
         music_filter = (
-            ";".join(music_segments)
-            + ";"
-            + f"{concat_inputs}concat=n={chunk_count}:v=0:a=1,"
-            f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS,volume={music_volume}[music]"
+            f"[1:a]aresample=44100,"
+            "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"atrim=start={music_start_offset}:duration={narration_duration},"
+            f"asetpts=PTS-STARTPTS,volume={music_volume}[music]"
         )
 
         if ducking:
@@ -464,7 +453,10 @@ class RenderService:
                 "-y",
                 "-i",
                 str(narration_path),
-                *music_inputs,
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(music_path),
                 "-filter_complex",
                 filter_complex,
                 "-map",
@@ -473,12 +465,6 @@ class RenderService:
                 "pcm_s16le",
                 str(output_path),
             ]
-        )
-
-    def _random_music_start_offset(self) -> float:
-        return round(
-            random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
-            2,
         )
 
     def _audio_duration(self, audio_path: Path) -> float | None:
@@ -493,18 +479,3 @@ class RenderService:
                 return round(frame_count / float(frame_rate), 2)
         except (FileNotFoundError, wave.Error):
             return None
-
-    def _music_chunk_inputs(self, *, music_path: Path, chunk_count: int, chunk_duration: float) -> list[str]:
-        inputs: list[str] = []
-        for _ in range(chunk_count):
-            inputs.extend(
-                [
-                    "-ss",
-                    str(self._random_music_start_offset()),
-                    "-t",
-                    str(chunk_duration),
-                    "-i",
-                    str(music_path),
-                ]
-            )
-        return inputs

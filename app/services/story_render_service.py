@@ -1,5 +1,4 @@
 from pathlib import Path
-import math
 import random
 import wave
 
@@ -18,10 +17,8 @@ class StoryRenderService:
     SCENE_END_ZOOM = 1.06
     SCENE_WORK_WIDTH = 1280
     SCENE_WORK_HEIGHT = 2276
-    MUSIC_MIN_START_OFFSET_SECONDS = 4.0
-    MUSIC_MAX_START_OFFSET_SECONDS = 8.0
-    MUSIC_CHUNK_DURATION_SECONDS = 10.0
-
+    MUSIC_MIN_START_OFFSET_SECONDS = 10.0
+    MUSIC_MAX_START_OFFSET_SECONDS = 15.0
     def __init__(
         self,
         ffmpeg_client,
@@ -380,24 +377,16 @@ class StoryRenderService:
         narration_duration = self._audio_duration(narration_path)
         if narration_duration is None:
             raise IntegrationError("Narration duration could not be determined for music mixing.")
-
-        chunk_count = max(math.ceil(narration_duration / self.MUSIC_CHUNK_DURATION_SECONDS) + 1, 2)
-        music_inputs = self._music_chunk_inputs(
-            music_path=music_path,
-            chunk_count=chunk_count,
-            chunk_duration=self.MUSIC_CHUNK_DURATION_SECONDS,
+        music_start_offset = round(
+            random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
+            2,
         )
         narration_filter = "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[narr]"
-        music_segments = [
-            f"[{index}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[m{index}]"
-            for index in range(1, chunk_count + 1)
-        ]
-        concat_inputs = "".join(f"[m{index}]" for index in range(1, chunk_count + 1))
         music_filter = (
-            ";".join(music_segments)
-            + ";"
-            + f"{concat_inputs}concat=n={chunk_count}:v=0:a=1,"
-            f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS,volume={music_volume}[music]"
+            f"[1:a]aresample=44100,"
+            "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"atrim=start={music_start_offset}:duration={narration_duration},"
+            f"asetpts=PTS-STARTPTS,volume={music_volume}[music]"
         )
 
         if ducking:
@@ -422,7 +411,10 @@ class StoryRenderService:
                 "-y",
                 "-i",
                 str(narration_path),
-                *music_inputs,
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(music_path),
                 "-filter_complex",
                 filter_complex,
                 "-map",
@@ -432,27 +424,6 @@ class StoryRenderService:
                 str(output_path),
             ]
         )
-
-    def _random_music_start_offset(self) -> float:
-        return round(
-            random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
-            2,
-        )
-
-    def _music_chunk_inputs(self, *, music_path: Path, chunk_count: int, chunk_duration: float) -> list[str]:
-        inputs: list[str] = []
-        for _ in range(chunk_count):
-            inputs.extend(
-                [
-                    "-ss",
-                    str(self._random_music_start_offset()),
-                    "-t",
-                    str(chunk_duration),
-                    "-i",
-                    str(music_path),
-                ]
-            )
-        return inputs
 
     def _select_music_for_payload(self, payload: StoryRenderRequest) -> str | None:
         if payload.background_music_path:
