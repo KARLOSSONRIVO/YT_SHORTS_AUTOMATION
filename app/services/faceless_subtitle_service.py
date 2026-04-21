@@ -400,9 +400,11 @@ class FacelessSubtitleService:
 
     def _single_word_event(self, token: str, start: float, end: float) -> str:
         escaped = self._escape_ass_text(token.upper())
+        ass_color = self._hex_to_ass_color(self.ACTIVE_WORD_COLOR)
         style_tag = (
             "{"
-            f"\\c{self._hex_to_ass_color(self.ACTIVE_WORD_COLOR)}"
+            f"\\1c{ass_color}"
+            f"\\c{ass_color}"
             "\\b1"
             f"\\fscx{self.ACTIVE_WORD_SCALE_PERCENT}"
             f"\\fscy{self.ACTIVE_WORD_SCALE_PERCENT}"

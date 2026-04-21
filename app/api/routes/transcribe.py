@@ -25,9 +25,12 @@ async def transcribe_upload(
     media_store: LocalMediaStoreService = Depends(get_local_media_store_service),
 ) -> TranscriptionResponse:
     media_uri = await media_store.save_upload(file)
-    payload = TranscriptionRequest(
-        job_id=job_id,
-        media_uri=media_uri,
-        language=language,
-    )
-    return await pipeline.run(payload)
+    try:
+        payload = TranscriptionRequest(
+            job_id=job_id,
+            media_uri=media_uri,
+            language=language,
+        )
+        return await pipeline.run(payload)
+    finally:
+        media_store.delete_upload(media_uri)

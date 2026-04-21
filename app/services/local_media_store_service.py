@@ -22,3 +22,12 @@ class LocalMediaStoreService:
 
         await upload.close()
         return str(target.resolve())
+
+    def delete_upload(self, media_uri: str) -> None:
+        target = Path(media_uri)
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            # Best-effort cleanup. Render/transcribe/analyze results are already
+            # persisted elsewhere, so a stale temp upload should not fail the request.
+            pass

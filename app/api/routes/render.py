@@ -21,6 +21,8 @@ router = APIRouter()
 @router.post("/render-clip-upload", response_model=RenderedClipResult)
 async def render_clip_upload(
     job_id: str = Form(...),
+    project_id: str | None = Form(default=None),
+    project_title: str | None = Form(default=None),
     clip_start: float = Form(...),
     clip_end: float = Form(...),
     title_hint: str | None = Form(default=None),
@@ -40,32 +42,37 @@ async def render_clip_upload(
     media_store: LocalMediaStoreService = Depends(get_local_media_store_service),
 ) -> RenderedClipResult:
     media_uri = await media_store.save_upload(file)
-    media_metadata = metadata_service.read(media_uri)
-    transcript = TranscriptResult.model_validate(json.loads(transcript_json))
-    rendered = render_service.render_clips(
-        media_uri=media_uri,
-        job_id=job_id,
-        media_metadata=media_metadata,
-        transcript=transcript,
-        clips=[
-            ClipCandidate(
-                start=clip_start,
-                end=clip_end,
-                title_hint=title_hint,
-                transcript_excerpt="",
-                scores=ClipScoreBreakdown(total_score=score),
-            )
-        ],
-        subtitle_prefs=SubtitlePreferences(
-            font_family=font_family,
-            font_size=font_size,
-            fill_color=fill_color,
-            stroke_color=stroke_color,
-            highlight_color=highlight_color,
-            position=position,
-            max_chars_per_line=max_chars_per_line,
-            max_lines=max_lines,
-        ),
-    )
+    try:
+        media_metadata = metadata_service.read(media_uri)
+        transcript = TranscriptResult.model_validate(json.loads(transcript_json))
+        rendered = render_service.render_clips(
+            media_uri=media_uri,
+            job_id=job_id,
+            project_id=project_id,
+            project_title=project_title,
+            media_metadata=media_metadata,
+            transcript=transcript,
+            clips=[
+                ClipCandidate(
+                    start=clip_start,
+                    end=clip_end,
+                    title_hint=title_hint,
+                    transcript_excerpt="",
+                    scores=ClipScoreBreakdown(total_score=score),
+                )
+            ],
+            subtitle_prefs=SubtitlePreferences(
+                font_family=font_family,
+                font_size=font_size,
+                fill_color=fill_color,
+                stroke_color=stroke_color,
+                highlight_color=highlight_color,
+                position=position,
+                max_chars_per_line=max_chars_per_line,
+                max_lines=max_lines,
+            ),
+        )
 
-    return rendered[0]
+        return rendered[0]
+    finally:
+        media_store.delete_upload(media_uri)

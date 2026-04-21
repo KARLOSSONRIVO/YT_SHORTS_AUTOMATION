@@ -8,6 +8,7 @@ from app.schemas.media import MediaMetadata
 from app.schemas.subtitles import SubtitlePreferences
 from app.schemas.transcription import TranscriptResult, TranscriptWord
 from app.schemas.workflow import RenderedClipResult
+from app.utils.output_paths import output_url, stage_output_dir
 
 
 @dataclass(slots=True)
@@ -32,6 +33,8 @@ class RenderService:
         *,
         media_uri: str,
         job_id: str,
+        project_id: str | None,
+        project_title: str | None,
         media_metadata: MediaMetadata,
         transcript: TranscriptResult,
         clips: list[ClipCandidate],
@@ -40,15 +43,24 @@ class RenderService:
         if not self.ffmpeg_client.is_available():
             raise IntegrationError("ffmpeg is required to render final Shorts clips.")
 
-        job_dir = self.output_dir / job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
+        clips_dir = stage_output_dir(
+            output_dir=self.output_dir,
+            project_title=project_title,
+            project_id=project_id or job_id,
+            stage_name="clips",
+        )
+        clips_dir.mkdir(parents=True, exist_ok=True)
         layout = self._compute_layout(media_metadata)
 
         rendered: list[RenderedClipResult] = []
         for index, clip in enumerate(clips, start=1):
-            clip_basename = f"clip_{index:02d}"
-            subtitle_path = job_dir / f"{clip_basename}.ass"
-            output_path = job_dir / f"{clip_basename}.mp4"
+            clip_basename = self._clip_basename(
+                job_id=job_id,
+                index=index,
+                title_hint=clip.title_hint,
+            )
+            subtitle_path = clips_dir / f"{clip_basename}.ass"
+            output_path = clips_dir / f"{clip_basename}.mp4"
             render_start = max(clip.start - self.WORD_LEAD_IN_SECONDS, 0.0)
             render_end = clip.end
             self._write_ass(
@@ -75,7 +87,7 @@ class RenderService:
                     title_hint=clip.title_hint,
                     score=clip.scores.total_score,
                     video_path=str(output_path.resolve()),
-                    video_url=f"/outputs/{job_id}/{output_path.name}",
+                    video_url=output_url(output_dir=self.output_dir, file_path=output_path),
                     subtitles_path=str(subtitle_path.resolve()),
                 )
             )
@@ -321,7 +333,8 @@ class RenderService:
         highlight_color: str,
     ) -> str:
         rendered_lines: list[str] = []
-        highlight_tag = f"{{\\c{self._hex_to_ass_color(highlight_color)}\\b1}}"
+        ass_color = self._hex_to_ass_color(highlight_color)
+        highlight_tag = f"{{\\1c{ass_color}\\c{ass_color}\\b1}}"
 
         for line in lines:
             tokens: list[str] = []
@@ -338,6 +351,24 @@ class RenderService:
             rendered_lines.append(" ".join(tokens))
 
         return r"\N".join(rendered_lines)
+
+    def _clip_basename(
+        self,
+        *,
+        job_id: str,
+        index: int,
+        title_hint: str | None,
+    ) -> str:
+        if title_hint:
+            sanitized_title = "".join(
+                character.lower() if character.isalnum() else "_"
+                for character in title_hint.strip()
+            )
+            sanitized_title = "_".join(part for part in sanitized_title.split("_") if part)
+            if sanitized_title:
+                return f"{sanitized_title[:48]}_{job_id}"
+
+        return f"clip_{index:02d}_{job_id}"
 
     def _compute_layout(self, media_metadata: MediaMetadata) -> dict:
         video_stream = next((stream for stream in media_metadata.streams if stream.codec_type == "video"), None)

@@ -12,6 +12,8 @@ class WorkflowPipeline:
         rendered_clips = self.render_service.render_clips(
             media_uri=req.media_uri,
             job_id=req.job_id,
+            project_id=None,
+            project_title=None,
             media_metadata=analysis.media,
             transcript=analysis.transcript,
             clips=analysis.clips,
