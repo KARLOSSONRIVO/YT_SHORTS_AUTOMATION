@@ -128,6 +128,8 @@ class StoryRenderRequest(BaseModel):
     audio_path: str
     subtitles_path: str | None = None
     background_music_path: str | None = None
+    background_video_path: str | None = None
+    render_mode: str = "scene_images"
     use_music: bool = True
     music_volume: float = Field(default=0.15, ge=0.0, le=1.0)
     ducking: bool = True

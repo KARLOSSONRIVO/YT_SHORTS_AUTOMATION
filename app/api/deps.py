@@ -206,6 +206,8 @@ def get_story_render_service() -> StoryRenderService:
         enable_background_music=settings.enable_background_music,
         default_music_volume=settings.default_music_volume,
         enable_audio_ducking=settings.enable_audio_ducking,
+        reddit_story_background_video_path=settings.reddit_story_background_video_path,
+        reddit_story_background_music_path=settings.reddit_story_background_music_path,
     )
 
 

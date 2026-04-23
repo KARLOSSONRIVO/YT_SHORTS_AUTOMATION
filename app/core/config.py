@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     default_music_volume: float = 0.15
     enable_audio_ducking: bool = True
     music_assets_path: str = "assets/music"
+    reddit_story_background_video_path: str | None = None
+    reddit_story_background_music_path: str | None = None
 
     # Whisper (STT)
     whisper_hf_model: str = "openai/whisper-large-v3-turbo"

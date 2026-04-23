@@ -1,6 +1,10 @@
 from pathlib import Path
 import random
+import shutil
+import textwrap
 import wave
+
+from PIL import Image, ImageDraw, ImageFont
 
 from app.core.exceptions import IntegrationError, ValidationError
 from app.schemas.faceless_video import StoryRenderRequest, StoryRenderResponse
@@ -19,6 +23,8 @@ class StoryRenderService:
     SCENE_WORK_HEIGHT = 2276
     MUSIC_MIN_START_OFFSET_SECONDS = 10.0
     MUSIC_MAX_START_OFFSET_SECONDS = 15.0
+    REDDIT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "assets" / "template" / "title_template.png"
+    REDDIT_CARD_VISIBLE_SECONDS = 4.2
     def __init__(
         self,
         ffmpeg_client,
@@ -28,6 +34,8 @@ class StoryRenderService:
         enable_background_music: bool = True,
         default_music_volume: float = 0.15,
         enable_audio_ducking: bool = True,
+        reddit_story_background_video_path: str | None = None,
+        reddit_story_background_music_path: str | None = None,
     ) -> None:
         self.ffmpeg_client = ffmpeg_client
         self.output_dir = Path(output_dir)
@@ -36,12 +44,12 @@ class StoryRenderService:
         self.enable_background_music = enable_background_music
         self.default_music_volume = default_music_volume
         self.enable_audio_ducking = enable_audio_ducking
+        self.reddit_story_background_video_path = reddit_story_background_video_path
+        self.reddit_story_background_music_path = reddit_story_background_music_path
 
     def render_story_video(self, payload: StoryRenderRequest) -> StoryRenderResponse:
         if not self.ffmpeg_client.is_available():
             raise IntegrationError("ffmpeg is required to render faceless story videos.")
-        if not payload.image_paths:
-            raise ValidationError("At least one scene image is required for rendering.")
 
         stage_dir = stage_output_dir(
             output_dir=self.output_dir,
@@ -72,6 +80,37 @@ class StoryRenderService:
                     render_audio_path = str(mixed_audio_path.resolve())
                 except IntegrationError:
                     render_audio_path = payload.audio_path
+
+        if payload.render_mode == "background_video":
+            background_video_path = self._resolve_background_video_path(payload)
+            total_duration = max(audio_duration or 0.0, 1.0)
+            reddit_intro_card_path = self._build_reddit_intro_card(payload, stage_dir)
+            render_subtitles_path = Path(payload.subtitles_path) if payload.subtitles_path else None
+            if render_subtitles_path and render_subtitles_path.exists():
+                safe_subtitle_dir = self.output_dir / "_render_tmp" / str(payload.project_id)
+                safe_subtitle_dir.mkdir(parents=True, exist_ok=True)
+                render_subtitles_path = self._copy_subtitles_to_safe_path(
+                    subtitles_path=render_subtitles_path,
+                    target_dir=safe_subtitle_dir,
+                )
+            self._render_background_video(
+                background_video_path=background_video_path,
+                audio_path=Path(render_audio_path),
+                subtitles_path=render_subtitles_path,
+                output_path=output_path,
+                duration=total_duration,
+                reddit_intro_card_path=reddit_intro_card_path,
+            )
+            return StoryRenderResponse(
+                job_id=payload.job_id,
+                project_id=payload.project_id,
+                video_path=str(output_path.resolve()),
+                video_url=output_url(output_dir=self.output_dir, file_path=output_path),
+                duration_seconds=round(total_duration, 2),
+            )
+
+        if not payload.image_paths:
+            raise ValidationError("At least one scene image is required for rendering.")
 
         subtitle_durations = None
         if payload.subtitles_path:
@@ -155,6 +194,77 @@ class StoryRenderService:
             video_url=output_url(output_dir=self.output_dir, file_path=output_path),
             duration_seconds=round(total_duration, 2),
         )
+
+    def _render_background_video(
+        self,
+        *,
+        background_video_path: Path,
+        audio_path: Path,
+        subtitles_path: Path | None,
+        output_path: Path,
+        duration: float,
+        reddit_intro_card_path: Path | None = None,
+    ) -> None:
+        base_video_filter = [
+            "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos",
+            "crop=1080:1920",
+            "format=rgba",
+        ]
+        if subtitles_path:
+            subtitle_filter = f"subtitles='{self._escape_filter_path(subtitles_path)}'"
+            if self.FONT_DIR.exists():
+                subtitle_filter += f":fontsdir='{self._escape_filter_path(self.FONT_DIR)}'"
+            base_video_filter.append(subtitle_filter)
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(background_video_path),
+            "-i",
+            str(audio_path),
+        ]
+
+        filter_complex = [f"[0:v]{','.join(base_video_filter)}[basev]"]
+        map_video_stream = "[basev]"
+
+        if reddit_intro_card_path and reddit_intro_card_path.exists():
+            command.extend(["-i", str(reddit_intro_card_path)])
+            filter_complex.append(
+                f"[basev][2:v]overlay=0:0:enable='between(t,0,{self.REDDIT_CARD_VISIBLE_SECONDS})'[intro]"
+            )
+            map_video_stream = "[intro]"
+
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filter_complex),
+                "-map",
+                map_video_stream,
+                "-map",
+                "1:a",
+                "-r",
+                str(self.SCENE_FPS),
+                "-t",
+                str(duration),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
+
+        self.ffmpeg_client.run(command)
 
     def _render_scene_clip(self, *, image_path: Path, output_path: Path, duration: float) -> None:
         if duration <= 0:
@@ -432,6 +542,11 @@ class StoryRenderService:
                 return str(explicit_path.resolve())
             return None
 
+        if payload.render_mode == "background_video" and self.reddit_story_background_music_path:
+            configured_path = Path(self.reddit_story_background_music_path)
+            if configured_path.exists():
+                return str(configured_path.resolve())
+
         if self.music_service is None:
             return None
 
@@ -448,3 +563,212 @@ class StoryRenderService:
         if self.music_service is not None and hasattr(self.music_service, "detect_mood"):
             return self.music_service.detect_mood(script)
         return "neutral"
+
+    def _resolve_background_video_path(self, payload: StoryRenderRequest) -> Path:
+        if payload.background_video_path:
+            explicit_path = Path(payload.background_video_path)
+            if explicit_path.exists():
+                return explicit_path.resolve()
+
+        if self.reddit_story_background_video_path:
+            configured_path = Path(self.reddit_story_background_video_path)
+            if configured_path.exists():
+                return configured_path.resolve()
+
+        raise ValidationError("A Reddit story background video must be configured before rendering.")
+
+    def _build_reddit_intro_card(self, payload: StoryRenderRequest, stage_dir: Path) -> Path | None:
+        if payload.render_mode != "background_video" or not self.REDDIT_TEMPLATE_PATH.exists():
+            return None
+
+        title = payload.project_title or "Reddit Story"
+
+        intro_card_path = stage_dir / "reddit_intro_card.png"
+        template_image = Image.open(self.REDDIT_TEMPLATE_PATH).convert("RGBA")
+        transparent_template = self._make_black_pixels_transparent(template_image)
+        draw = ImageDraw.Draw(transparent_template)
+
+        title_font = self._load_font(42, bold=True)
+        meta_font = self._load_font(24, bold=False)
+
+        title_box = (215, 875, 930, 1205)
+        meta_position = (215, 800)
+
+        subreddit = self._guess_subreddit_from_title(title)
+        draw.text(meta_position, subreddit, fill=(36, 36, 36, 255), font=meta_font)
+        self._draw_wrapped_text(
+            draw,
+            title_box,
+            title,
+            title_font,
+            fill=(24, 24, 24, 255),
+            line_spacing=8,
+            max_lines=4,
+        )
+
+        transparent_template.save(intro_card_path)
+        return intro_card_path
+
+    def _make_black_pixels_transparent(self, image: Image.Image) -> Image.Image:
+        converted = image.copy()
+        pixels = converted.load()
+        width, height = converted.size
+        for x in range(width):
+            for y in range(height):
+                red, green, blue, alpha = pixels[x, y]
+                if red <= 10 and green <= 10 and blue <= 10:
+                    pixels[x, y] = (red, green, blue, 0)
+                else:
+                    pixels[x, y] = (red, green, blue, alpha)
+        return converted
+
+    def _load_font(self, size: int, *, bold: bool) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        preferred_fonts = ["DejaVuSans-Bold.ttf", "arialbd.ttf"] if bold else ["DejaVuSans.ttf", "arial.ttf"]
+        for font_name in preferred_fonts:
+            try:
+                return ImageFont.truetype(font_name, size=size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    def _draw_wrapped_text(
+        self,
+        draw: ImageDraw.ImageDraw,
+        box: tuple[int, int, int, int],
+        text: str,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+        *,
+        fill: tuple[int, int, int, int],
+        line_spacing: int,
+        max_lines: int | None = None,
+    ) -> None:
+        left, top, right, bottom = box
+        max_width = right - left
+        wrapped_lines = self._wrap_to_width(draw, text, font, max_width)
+        if max_lines is not None and len(wrapped_lines) > max_lines:
+            wrapped_lines = wrapped_lines[:max_lines]
+            if wrapped_lines:
+                wrapped_lines[-1] = self._ellipsis_to_width(draw, wrapped_lines[-1], font, max_width)
+
+        y_cursor = top
+        for line in wrapped_lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            line_height = bbox[3] - bbox[1]
+            if y_cursor + line_height > bottom:
+                break
+            draw.text((left, y_cursor), line, fill=fill, font=font)
+            y_cursor += line_height + line_spacing
+
+    def _wrap_to_width(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+        max_width: int,
+    ) -> list[str]:
+        words = text.split()
+        if not words:
+            return []
+
+        lines: list[str] = []
+        current_line = words[0]
+        for word in words[1:]:
+            candidate = f"{current_line} {word}"
+            if self._text_width(draw, candidate, font) <= max_width:
+                current_line = candidate
+            else:
+                lines.append(current_line)
+                current_line = word
+        lines.append(current_line)
+        return lines
+
+    def _ellipsis_to_width(
+        self,
+        draw: ImageDraw.ImageDraw,
+        line: str,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+        max_width: int,
+    ) -> str:
+        candidate = line.rstrip(". ") + "..."
+        while candidate and self._text_width(draw, candidate, font) > max_width:
+            candidate = candidate[:-4].rstrip() + "..."
+        return candidate
+
+    def _text_width(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    ) -> int:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0]
+
+    def _shift_subtitles_for_intro(self, *, subtitles_path: Path, stage_dir: Path, offset_seconds: float) -> Path:
+        suffix = subtitles_path.suffix.lower()
+        shifted_path = stage_dir / f"{subtitles_path.stem}_intro_shifted{suffix}"
+
+        if suffix == ".srt":
+            shifted_lines: list[str] = []
+            for line in subtitles_path.read_text(encoding="utf-8").splitlines():
+                if " --> " not in line:
+                    shifted_lines.append(line)
+                    continue
+
+                start_raw, end_raw = line.split(" --> ", 1)
+                shifted_start = self._format_srt_timestamp(self._parse_srt_timestamp(start_raw) + offset_seconds)
+                shifted_end = self._format_srt_timestamp(self._parse_srt_timestamp(end_raw) + offset_seconds)
+                shifted_lines.append(f"{shifted_start} --> {shifted_end}")
+
+            shifted_path.write_text("\n".join(shifted_lines), encoding="utf-8")
+            return shifted_path
+
+        if suffix == ".ass":
+            shifted_lines: list[str] = []
+            for line in subtitles_path.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("Dialogue:"):
+                    shifted_lines.append(line)
+                    continue
+
+                parts = line.split(",", 9)
+                if len(parts) < 10:
+                    shifted_lines.append(line)
+                    continue
+
+                parts[1] = self._format_ass_timestamp(self._parse_ass_timestamp(parts[1].strip()) + offset_seconds)
+                parts[2] = self._format_ass_timestamp(self._parse_ass_timestamp(parts[2].strip()) + offset_seconds)
+                shifted_lines.append(",".join(parts))
+
+            shifted_path.write_text("\n".join(shifted_lines), encoding="utf-8")
+            return shifted_path
+
+        return subtitles_path
+
+    def _copy_subtitles_to_safe_path(self, *, subtitles_path: Path, target_dir: Path) -> Path:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        safe_path = target_dir / subtitles_path.name
+        shutil.copyfile(subtitles_path, safe_path)
+        return safe_path
+
+    def _format_ass_timestamp(self, seconds: float) -> str:
+        total_centiseconds = max(int(round(seconds * 100)), 0)
+        hours = total_centiseconds // 360000
+        remaining = total_centiseconds % 360000
+        minutes = remaining // 6000
+        remaining %= 6000
+        secs = remaining // 100
+        centiseconds = remaining % 100
+        return f"{hours}:{minutes:02d}:{secs:02d}.{centiseconds:02d}"
+
+    def _format_srt_timestamp(self, seconds: float) -> str:
+        total_milliseconds = max(int(round(seconds * 1000)), 0)
+        hours = total_milliseconds // 3600000
+        remaining = total_milliseconds % 3600000
+        minutes = remaining // 60000
+        remaining %= 60000
+        secs = remaining // 1000
+        milliseconds = remaining % 1000
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
+
+    def _guess_subreddit_from_title(self, title: str) -> str:
+        cleaned = textwrap.shorten(title.replace("\n", " "), width=28, placeholder="…")
+        return f"Trending story • {cleaned}"

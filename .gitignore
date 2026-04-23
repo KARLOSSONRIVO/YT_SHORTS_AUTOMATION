@@ -4,3 +4,5 @@ __pycache__/
 .env
 uploads/
 outputs/
+
+app/assets/video
