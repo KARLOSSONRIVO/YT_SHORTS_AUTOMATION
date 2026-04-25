@@ -68,6 +68,7 @@ class StoryRenderService:
         scene_clip_dir.mkdir(parents=True, exist_ok=True)
         audio_duration = self._audio_duration(Path(payload.audio_path))
         music_volume = payload.music_volume if payload.music_volume is not None else self.default_music_volume
+        narration_volume = payload.narration_volume if payload.narration_volume is not None else 1.0
         if self.enable_background_music and payload.use_music:
             selected_music_path = self._select_music_for_payload(payload)
             if selected_music_path:
@@ -79,6 +80,7 @@ class StoryRenderService:
                         output_path=mixed_audio_path,
                         ducking=payload.ducking and self.enable_audio_ducking,
                         music_volume=music_volume,
+                        narration_volume=narration_volume,
                     )
                     render_audio_path = str(mixed_audio_path.resolve())
                 except IntegrationError:
@@ -497,11 +499,13 @@ class StoryRenderService:
         output_path: Path,
         ducking: bool = True,
         music_volume: float = 0.15,
+        narration_volume: float = 1.0,
     ) -> None:
         if not music_path.exists():
             raise IntegrationError("Background music track was not found.")
 
         music_volume = min(max(music_volume, 0.0), 1.0)
+        narration_volume = min(max(narration_volume, 0.0), 2.0)
         narration_duration = self._audio_duration(narration_path)
         if narration_duration is None:
             raise IntegrationError("Narration duration could not be determined for music mixing.")
@@ -509,7 +513,11 @@ class StoryRenderService:
             random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
             2,
         )
-        narration_filter = "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[narr]"
+        narration_filter = (
+            "[0:a]aresample=44100,"
+            "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"volume={narration_volume}[narr]"
+        )
         music_filter = (
             f"[1:a]aresample=44100,"
             "aformat=sample_fmts=fltp:channel_layouts=stereo,"

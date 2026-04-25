@@ -144,6 +144,7 @@ class StoryRenderRequest(BaseModel):
     render_mode: str = "scene_images"
     use_music: bool = True
     music_volume: float = Field(default=0.15, ge=0.0, le=1.0)
+    narration_volume: float = Field(default=1.0, ge=0.0, le=2.0)
     ducking: bool = True
 
 
