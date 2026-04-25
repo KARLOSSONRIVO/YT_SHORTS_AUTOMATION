@@ -36,6 +36,7 @@ class AudioGenerationRequest(BaseModel):
     job_id: str
     project_id: str
     project_title: str | None = None
+    output_bucket: str | None = None
     narration: str
     voice: str = "af_sarah"
     speaking_rate: float = Field(default=0.82, gt=0)
@@ -82,8 +83,17 @@ class StorySubtitleGenerationRequest(BaseModel):
     job_id: str
     project_id: str
     project_title: str | None = None
+    output_bucket: str | None = None
     audio_path: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
+    font_family: str | None = None
+    font_size: int | None = Field(default=None, ge=24, le=120)
+    fill_color: str | None = None
+    stroke_color: str | None = None
+    highlight_color: str | None = None
+    position: str | None = None
+    max_chars_per_line: int | None = Field(default=None, ge=12, le=42)
+    max_lines: int | None = Field(default=None, ge=1, le=4)
 
 
 class StorySubtitleGenerationResponse(BaseModel):
@@ -102,6 +112,7 @@ class SceneImageGenerationRequest(BaseModel):
     job_id: str
     project_id: str
     project_title: str | None = None
+    output_bucket: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
     visual_style: str = "vertical cinematic, high contrast"
 
@@ -123,6 +134,7 @@ class StoryRenderRequest(BaseModel):
     job_id: str
     project_id: str
     project_title: str | None = None
+    output_bucket: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
     image_paths: list[str] = Field(default_factory=list)
     audio_path: str
@@ -141,3 +153,14 @@ class StoryRenderResponse(BaseModel):
     video_path: str
     video_url: str
     duration_seconds: float
+
+
+class ProjectOutputCleanupRequest(BaseModel):
+    project_id: str
+    project_title: str | None = None
+    output_bucket: str | None = None
+
+
+class ProjectOutputCleanupResponse(BaseModel):
+    project_id: str
+    deleted: bool

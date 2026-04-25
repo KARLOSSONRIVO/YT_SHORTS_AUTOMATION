@@ -8,7 +8,7 @@ from app.schemas.media import MediaMetadata
 from app.schemas.subtitles import SubtitlePreferences
 from app.schemas.transcription import TranscriptResult, TranscriptWord
 from app.schemas.workflow import RenderedClipResult
-from app.utils.output_paths import output_url, stage_output_dir
+from app.utils.output_paths import dated_stage_output_dir, output_url
 
 
 @dataclass(slots=True)
@@ -43,8 +43,9 @@ class RenderService:
         if not self.ffmpeg_client.is_available():
             raise IntegrationError("ffmpeg is required to render final Shorts clips.")
 
-        clips_dir = stage_output_dir(
+        clips_dir = dated_stage_output_dir(
             output_dir=self.output_dir,
+            output_bucket="clipping",
             project_title=project_title,
             project_id=project_id or job_id,
             stage_name="clips",

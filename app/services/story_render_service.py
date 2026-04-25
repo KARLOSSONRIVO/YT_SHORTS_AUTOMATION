@@ -1,14 +1,14 @@
 from pathlib import Path
 import random
 import shutil
-import textwrap
+import subprocess
 import wave
 
 from PIL import Image, ImageDraw, ImageFont
 
 from app.core.exceptions import IntegrationError, ValidationError
 from app.schemas.faceless_video import StoryRenderRequest, StoryRenderResponse
-from app.utils.output_paths import output_url, stage_output_dir
+from app.utils.output_paths import dated_stage_output_dir, output_url
 
 
 class StoryRenderService:
@@ -24,7 +24,9 @@ class StoryRenderService:
     MUSIC_MIN_START_OFFSET_SECONDS = 10.0
     MUSIC_MAX_START_OFFSET_SECONDS = 15.0
     REDDIT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "assets" / "template" / "title_template.png"
-    REDDIT_CARD_VISIBLE_SECONDS = 4.2
+    REDDIT_CARD_DEFAULT_VISIBLE_SECONDS = 2.4
+    REDDIT_CARD_MIN_VISIBLE_SECONDS = 1.2
+    REDDIT_CARD_MAX_VISIBLE_SECONDS = 4.8
     def __init__(
         self,
         ffmpeg_client,
@@ -51,11 +53,12 @@ class StoryRenderService:
         if not self.ffmpeg_client.is_available():
             raise IntegrationError("ffmpeg is required to render faceless story videos.")
 
-        stage_dir = stage_output_dir(
+        stage_dir = dated_stage_output_dir(
             output_dir=self.output_dir,
+            output_bucket=payload.output_bucket,
             project_title=payload.project_title,
             project_id=payload.project_id,
-            stage_name="render",
+            stage_name="rendered_video",
         )
         stage_dir.mkdir(parents=True, exist_ok=True)
         concat_path = stage_dir / "scene_inputs.txt"
@@ -85,6 +88,10 @@ class StoryRenderService:
             background_video_path = self._resolve_background_video_path(payload)
             total_duration = max(audio_duration or 0.0, 1.0)
             reddit_intro_card_path = self._build_reddit_intro_card(payload, stage_dir)
+            reddit_intro_visible_seconds = self._reddit_intro_visible_seconds(
+                payload=payload,
+                subtitles_path=Path(payload.subtitles_path) if payload.subtitles_path else None,
+            )
             render_subtitles_path = Path(payload.subtitles_path) if payload.subtitles_path else None
             if render_subtitles_path and render_subtitles_path.exists():
                 safe_subtitle_dir = self.output_dir / "_render_tmp" / str(payload.project_id)
@@ -100,6 +107,7 @@ class StoryRenderService:
                 output_path=output_path,
                 duration=total_duration,
                 reddit_intro_card_path=reddit_intro_card_path,
+                reddit_intro_visible_seconds=reddit_intro_visible_seconds,
             )
             return StoryRenderResponse(
                 job_id=payload.job_id,
@@ -204,8 +212,15 @@ class StoryRenderService:
         output_path: Path,
         duration: float,
         reddit_intro_card_path: Path | None = None,
+        reddit_intro_visible_seconds: float | None = None,
     ) -> None:
+        background_video_duration = self._media_duration(background_video_path)
+        background_start_offset = self._background_video_start_offset(
+            video_duration=background_video_duration,
+            target_duration=duration,
+        )
         base_video_filter = [
+            "setpts=PTS-STARTPTS",
             "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos",
             "crop=1080:1920",
             "format=rgba",
@@ -216,16 +231,19 @@ class StoryRenderService:
                 subtitle_filter += f":fontsdir='{self._escape_filter_path(self.FONT_DIR)}'"
             base_video_filter.append(subtitle_filter)
 
-        command = [
-            "ffmpeg",
-            "-y",
-            "-stream_loop",
-            "-1",
-            "-i",
-            str(background_video_path),
-            "-i",
-            str(audio_path),
-        ]
+        command = ["ffmpeg", "-y"]
+        if background_start_offset > 0:
+            command.extend(["-ss", str(round(background_start_offset, 2))])
+        command.extend(
+            [
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(background_video_path),
+                "-i",
+                str(audio_path),
+            ]
+        )
 
         filter_complex = [f"[0:v]{','.join(base_video_filter)}[basev]"]
         map_video_stream = "[basev]"
@@ -233,7 +251,7 @@ class StoryRenderService:
         if reddit_intro_card_path and reddit_intro_card_path.exists():
             command.extend(["-i", str(reddit_intro_card_path)])
             filter_complex.append(
-                f"[basev][2:v]overlay=0:0:enable='between(t,0,{self.REDDIT_CARD_VISIBLE_SECONDS})'[intro]"
+                f"[basev][2:v]overlay=0:0:enable='between(t,0,{reddit_intro_visible_seconds or self.REDDIT_CARD_DEFAULT_VISIBLE_SECONDS})'[intro]"
             )
             map_video_stream = "[intro]"
 
@@ -542,17 +560,19 @@ class StoryRenderService:
                 return str(explicit_path.resolve())
             return None
 
+        script_text = " ".join(scene.narration for scene in payload.scenes if scene.narration).strip()
+        detected_mood = self._detect_mood(script_text) if script_text else "neutral"
+        if self.music_service is not None:
+            selected_track = self.music_service.get_music_for_mood(detected_mood)
+            if selected_track:
+                return selected_track
+
         if payload.render_mode == "background_video" and self.reddit_story_background_music_path:
             configured_path = Path(self.reddit_story_background_music_path)
             if configured_path.exists():
                 return str(configured_path.resolve())
 
-        if self.music_service is None:
-            return None
-
-        script_text = " ".join(scene.narration for scene in payload.scenes if scene.narration).strip()
-        detected_mood = self._detect_mood(script_text) if script_text else "neutral"
-        return self.music_service.get_music_for_mood(detected_mood)
+        return None
 
     def _detect_mood(self, script: str) -> str:
         if self.llm_service is not None and hasattr(self.llm_service, "detect_mood"):
@@ -588,13 +608,13 @@ class StoryRenderService:
         transparent_template = self._make_black_pixels_transparent(template_image)
         draw = ImageDraw.Draw(transparent_template)
 
-        title_font = self._load_font(42, bold=True)
+        title_font = self._load_font(34, bold=True)
         meta_font = self._load_font(24, bold=False)
 
-        title_box = (215, 875, 930, 1205)
-        meta_position = (215, 800)
+        title_box = (135, 955, 920, 1215)
+        meta_position = (215, 842)
 
-        subreddit = self._guess_subreddit_from_title(title)
+        subreddit = self._guess_subreddit_from_title()
         draw.text(meta_position, subreddit, fill=(36, 36, 36, 255), font=meta_font)
         self._draw_wrapped_text(
             draw,
@@ -603,7 +623,7 @@ class StoryRenderService:
             title_font,
             fill=(24, 24, 24, 255),
             line_spacing=8,
-            max_lines=4,
+            max_lines=3,
         )
 
         transparent_template.save(intro_card_path)
@@ -749,6 +769,93 @@ class StoryRenderService:
         shutil.copyfile(subtitles_path, safe_path)
         return safe_path
 
+    def _reddit_intro_visible_seconds(
+        self,
+        *,
+        payload: StoryRenderRequest,
+        subtitles_path: Path | None,
+    ) -> float:
+        title_word_count = len([token for token in payload.project_title.split() if token.strip()]) if payload.project_title else 0
+        if title_word_count <= 0:
+            return self.REDDIT_CARD_DEFAULT_VISIBLE_SECONDS
+
+        if subtitles_path and subtitles_path.exists() and subtitles_path.suffix.lower() == ".ass":
+            ass_events = self._parse_ass_word_events(subtitles_path)
+            if len(ass_events) >= title_word_count:
+                visible_until = ass_events[title_word_count - 1][1]
+                return min(
+                    max(round(visible_until, 2), self.REDDIT_CARD_MIN_VISIBLE_SECONDS),
+                    self.REDDIT_CARD_MAX_VISIBLE_SECONDS,
+                )
+
+        estimated_duration = round(title_word_count / 2.9, 2)
+        return min(
+            max(estimated_duration, self.REDDIT_CARD_MIN_VISIBLE_SECONDS),
+            self.REDDIT_CARD_MAX_VISIBLE_SECONDS,
+        )
+
+    def _parse_ass_word_events(self, path: Path) -> list[tuple[float, float]]:
+        cues: list[tuple[float, float]] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.startswith("Dialogue:"):
+                continue
+
+            parts = line.split(",", 9)
+            if len(parts) < 10:
+                continue
+
+            text = parts[9].strip()
+            if not text:
+                continue
+
+            cues.append(
+                (
+                    self._parse_ass_timestamp(parts[1].strip()),
+                    self._parse_ass_timestamp(parts[2].strip()),
+                )
+            )
+        return cues
+
+    def _media_duration(self, media_path: Path) -> float | None:
+        if not shutil.which("ffprobe") or not media_path.exists():
+            return None
+
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+
+        try:
+            duration = float(result.stdout.strip())
+        except ValueError:
+            return None
+
+        return duration if duration > 0 else None
+
+    def _background_video_start_offset(self, *, video_duration: float | None, target_duration: float) -> float:
+        if video_duration is None or video_duration <= target_duration + 0.5:
+            if video_duration is None or video_duration <= 8:
+                return 0.0
+            return random.uniform(0.0, max(video_duration - 6.0, 0.0))
+
+        max_offset = max(video_duration - target_duration, 0.0)
+        if max_offset <= 0:
+            return 0.0
+        return random.uniform(0.0, max_offset)
+
     def _format_ass_timestamp(self, seconds: float) -> str:
         total_centiseconds = max(int(round(seconds * 100)), 0)
         hours = total_centiseconds // 360000
@@ -769,6 +876,5 @@ class StoryRenderService:
         milliseconds = remaining % 1000
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
 
-    def _guess_subreddit_from_title(self, title: str) -> str:
-        cleaned = textwrap.shorten(title.replace("\n", " "), width=28, placeholder="…")
-        return f"Trending story • {cleaned}"
+    def _guess_subreddit_from_title(self) -> str:
+        return "Trending story"

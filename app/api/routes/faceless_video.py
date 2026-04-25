@@ -1,3 +1,5 @@
+import shutil
+
 from fastapi import APIRouter, Depends
 
 from app.api.deps import (
@@ -18,6 +20,8 @@ from app.schemas.faceless_video import (
     StoryRenderResponse,
     StorySubtitleGenerationRequest,
     StorySubtitleGenerationResponse,
+    ProjectOutputCleanupRequest,
+    ProjectOutputCleanupResponse,
     VoiceOption,
     VoicePreviewRequest,
     VoicePreviewResponse,
@@ -27,6 +31,7 @@ from app.services.image_service import ImageService
 from app.services.llm_service import LLMService
 from app.services.story_render_service import StoryRenderService
 from app.services.tts_service import TTSService
+from app.utils.output_paths import iter_project_output_roots
 
 router = APIRouter(prefix="/faceless")
 
@@ -84,3 +89,24 @@ async def render_story(
     render_service: StoryRenderService = Depends(get_story_render_service),
 ) -> StoryRenderResponse:
     return render_service.render_story_video(payload)
+
+
+@router.post("/cleanup-project-output", response_model=ProjectOutputCleanupResponse)
+async def cleanup_project_output(
+    payload: ProjectOutputCleanupRequest,
+) -> ProjectOutputCleanupResponse:
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    output_roots = iter_project_output_roots(
+        output_dir=settings.output_dir,
+        project_title=payload.project_title,
+        project_id=payload.project_id,
+        output_bucket=payload.output_bucket,
+    )
+    for output_root in output_roots:
+        if output_root.exists():
+            shutil.rmtree(output_root, ignore_errors=True)
+
+    deleted = all(not output_root.exists() for output_root in output_roots)
+    return ProjectOutputCleanupResponse(project_id=payload.project_id, deleted=deleted)

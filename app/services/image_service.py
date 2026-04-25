@@ -42,6 +42,7 @@ class ImageService:
     ) -> SceneImageGenerationResponse:
         stage_dir = stage_output_dir(
             output_dir=self.output_dir,
+            output_bucket=payload.output_bucket,
             project_title=payload.project_title,
             project_id=payload.project_id,
             stage_name="scenes",

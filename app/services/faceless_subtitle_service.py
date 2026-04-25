@@ -61,6 +61,7 @@ class FacelessSubtitleService:
     ) -> StorySubtitleGenerationResponse:
         stage_dir = stage_output_dir(
             output_dir=self.output_dir,
+            output_bucket=payload.output_bucket,
             project_title=payload.project_title,
             project_id=payload.project_id,
             stage_name="subtitles",
@@ -74,7 +75,7 @@ class FacelessSubtitleService:
         timestamp_json_path = stage_dir / "subtitles.json"
 
         srt_path.write_text(self._to_srt(cues), encoding="utf-8")
-        ass_path.write_text(self._to_ass(timed_cues), encoding="utf-8")
+        ass_path.write_text(self._to_ass(timed_cues, payload), encoding="utf-8")
         timestamp_json_path.write_text(
             json.dumps([cue.model_dump() for cue in cues], indent=2),
             encoding="utf-8",
@@ -301,7 +302,7 @@ class FacelessSubtitleService:
             )
         return "\n\n".join(blocks)
 
-    def _to_ass(self, cues: list[TimedCue]) -> str:
+    def _to_ass(self, cues: list[TimedCue], payload: StorySubtitleGenerationRequest) -> str:
         lines = [
             "[Script Info]",
             "ScriptType: v4.00+",
@@ -310,47 +311,57 @@ class FacelessSubtitleService:
             "",
             "[V4+ Styles]",
             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-            self._ass_style_line(),
+            self._ass_style_line(payload),
             "",
             "[Events]",
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
         ]
         for cue in cues:
-            lines.extend(self._cue_to_ass_events(cue))
+            lines.extend(self._cue_to_ass_events(cue, payload))
         return "\n".join(lines)
 
-    def _ass_style_line(self) -> str:
+    def _ass_style_line(self, payload: StorySubtitleGenerationRequest) -> str:
+        font_name = payload.font_family or "Montserrat ExtraBold"
+        font_size = payload.font_size or 64
+        primary_color = self._hex_to_ass_color(payload.fill_color or "#FFFFFF")
+        outline_color = self._hex_to_ass_color(payload.stroke_color or "#000000")
+        alignment = self._ass_alignment(payload.position)
+        margin_v = self._ass_margin_vertical(payload.position)
         return (
             "Style: Default,"
-            "Bebas Neue,"
-            "156,"
-            "&H00FFFFFF,"
-            "&H00FFFFFF,"
-            "&H00000000,"
+            f"{font_name},"
+            f"{font_size},"
+            f"{primary_color},"
+            f"{primary_color},"
+            f"{outline_color},"
             "&H64000000,"
             "1,0,0,0,100,100,0,0,1,5,0,"
-            "5,60,60,220,1"
+            f"{alignment},60,60,{margin_v},1"
         )
 
-    def _cue_to_ass_events(self, cue: TimedCue) -> list[str]:
+    def _cue_to_ass_events(self, cue: TimedCue, payload: StorySubtitleGenerationRequest) -> list[str]:
         if cue.words:
-            return self._word_timed_events(cue)
+            return self._word_timed_events(cue, payload)
 
         tokens = cue.text.split()
         if not tokens:
             return []
 
         if len(tokens) == 1:
-            return [self._single_word_event(tokens[0], cue.start, cue.end)]
+            return [self._single_word_event(tokens[0], cue.start, cue.end, payload)]
 
         timings = self._word_timings(cue, tokens)
-        return [self._single_word_event(tokens[index], start, end) for index, (start, end) in enumerate(timings)]
+        return [
+            self._single_word_event(tokens[index], start, end, payload)
+            for index, (start, end) in enumerate(timings)
+        ]
 
-    def _word_timed_events(self, cue: TimedCue) -> list[str]:
+    def _word_timed_events(self, cue: TimedCue, payload: StorySubtitleGenerationRequest) -> list[str]:
         words = [word for word in cue.words if word.text]
         if not words:
             return self._cue_to_ass_events(
-                TimedCue(index=cue.index, start=cue.start, end=cue.end, text=cue.text, words=[])
+                TimedCue(index=cue.index, start=cue.start, end=cue.end, text=cue.text, words=[]),
+                payload
             )
 
         events: list[str] = []
@@ -358,7 +369,7 @@ class FacelessSubtitleService:
             start = max(word.start, cue.start)
             end = cue.end if active_index == len(words) - 1 else max(words[active_index + 1].start, word.end)
             end = max(end, start + 0.05)
-            events.append(self._single_word_event(word.text, start, end))
+            events.append(self._single_word_event(word.text, start, end, payload))
         return events
 
     def _word_timings(self, cue: SubtitleCue, tokens: list[str]) -> list[tuple[float, float]]:
@@ -398,9 +409,15 @@ class FacelessSubtitleService:
             timings[-1] = (start, round(cue.end, 2))
         return timings
 
-    def _single_word_event(self, token: str, start: float, end: float) -> str:
+    def _single_word_event(
+        self,
+        token: str,
+        start: float,
+        end: float,
+        payload: StorySubtitleGenerationRequest,
+    ) -> str:
         escaped = self._escape_ass_text(token.upper())
-        ass_color = self._hex_to_ass_color(self.ACTIVE_WORD_COLOR)
+        ass_color = self._hex_to_ass_color(payload.highlight_color or self.ACTIVE_WORD_COLOR)
         style_tag = (
             "{"
             f"\\1c{ass_color}"
@@ -418,6 +435,20 @@ class FacelessSubtitleService:
             f"{self._format_ass_timestamp(end)},"
             f"Default,,0,0,0,,{style_tag}{escaped}{{\\rDefault}}"
         )
+
+    def _ass_alignment(self, position: str | None) -> int:
+        if position == "top_center":
+            return 8
+        if position == "middle_center":
+            return 5
+        return 2
+
+    def _ass_margin_vertical(self, position: str | None) -> int:
+        if position == "top_center":
+            return 180
+        if position == "middle_center":
+            return 120
+        return 220
 
     def _escape_ass_text(self, text: str) -> str:
         escaped = text.replace("\\", r"\\")
