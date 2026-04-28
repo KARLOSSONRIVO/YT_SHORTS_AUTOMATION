@@ -26,7 +26,6 @@ class StoryRenderService:
     REDDIT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "assets" / "template" / "title_template.png"
     REDDIT_CARD_DEFAULT_VISIBLE_SECONDS = 2.4
     REDDIT_CARD_MIN_VISIBLE_SECONDS = 1.2
-    REDDIT_CARD_MAX_VISIBLE_SECONDS = 4.8
     def __init__(
         self,
         ffmpeg_client,
@@ -95,6 +94,12 @@ class StoryRenderService:
                 subtitles_path=Path(payload.subtitles_path) if payload.subtitles_path else None,
             )
             render_subtitles_path = Path(payload.subtitles_path) if payload.subtitles_path else None
+            if render_subtitles_path and render_subtitles_path.exists() and reddit_intro_visible_seconds > 0:
+                render_subtitles_path = self._trim_reddit_intro_subtitles(
+                    subtitles_path=render_subtitles_path,
+                    stage_dir=stage_dir,
+                    visible_until_seconds=reddit_intro_visible_seconds,
+                )
             if render_subtitles_path and render_subtitles_path.exists():
                 safe_subtitle_dir = self.output_dir / "_render_tmp" / str(payload.project_id)
                 safe_subtitle_dir.mkdir(parents=True, exist_ok=True)
@@ -777,33 +782,89 @@ class StoryRenderService:
         shutil.copyfile(subtitles_path, safe_path)
         return safe_path
 
+    def _trim_reddit_intro_subtitles(
+        self,
+        *,
+        subtitles_path: Path,
+        stage_dir: Path,
+        visible_until_seconds: float,
+    ) -> Path:
+        if visible_until_seconds <= 0 or not subtitles_path.exists():
+            return subtitles_path
+
+        suffix = subtitles_path.suffix.lower()
+        filtered_path = stage_dir / f"{subtitles_path.stem}_after_intro{suffix}"
+
+        if suffix == ".ass":
+            kept_lines: list[str] = []
+            for line in subtitles_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("Dialogue:"):
+                    parts = line.split(",", 9)
+                    if len(parts) >= 10:
+                        start = self._parse_ass_timestamp(parts[1].strip())
+                        end = self._parse_ass_timestamp(parts[2].strip())
+                        if end <= visible_until_seconds:
+                            continue
+                        if start < visible_until_seconds:
+                            parts[1] = self._format_ass_timestamp(visible_until_seconds)
+                            line = ",".join(parts)
+                kept_lines.append(line)
+
+            filtered_path.write_text("\n".join(kept_lines), encoding="utf-8")
+            return filtered_path
+
+        if suffix == ".srt":
+            blocks = [block.strip() for block in subtitles_path.read_text(encoding="utf-8").split("\n\n") if block.strip()]
+            kept_blocks: list[str] = []
+            for block in blocks:
+                lines = [line for line in block.splitlines() if line.strip()]
+                if len(lines) < 3:
+                    kept_blocks.append("\n".join(lines))
+                    continue
+                timing_parts = lines[1].split(" --> ")
+                if len(timing_parts) != 2:
+                    kept_blocks.append("\n".join(lines))
+                    continue
+                start = self._parse_srt_timestamp(timing_parts[0])
+                end = self._parse_srt_timestamp(timing_parts[1])
+                if end <= visible_until_seconds:
+                    continue
+                if start < visible_until_seconds:
+                    lines[1] = (
+                        f"{self._format_srt_timestamp(visible_until_seconds)}"
+                        f" --> {self._format_srt_timestamp(end)}"
+                    )
+                kept_blocks.append("\n".join(lines))
+
+            filtered_path.write_text("\n\n".join(kept_blocks), encoding="utf-8")
+            return filtered_path
+
+        return subtitles_path
+
     def _reddit_intro_visible_seconds(
         self,
         *,
         payload: StoryRenderRequest,
         subtitles_path: Path | None,
     ) -> float:
-        title_word_count = len([token for token in payload.project_title.split() if token.strip()]) if payload.project_title else 0
-        if title_word_count <= 0:
+        title_tokens = self._normalized_title_tokens(payload.project_title)
+        if not title_tokens:
             return self.REDDIT_CARD_DEFAULT_VISIBLE_SECONDS
 
         if subtitles_path and subtitles_path.exists() and subtitles_path.suffix.lower() == ".ass":
             ass_events = self._parse_ass_word_events(subtitles_path)
-            if len(ass_events) >= title_word_count:
-                visible_until = ass_events[title_word_count - 1][1]
-                return min(
-                    max(round(visible_until, 2), self.REDDIT_CARD_MIN_VISIBLE_SECONDS),
-                    self.REDDIT_CARD_MAX_VISIBLE_SECONDS,
-                )
+            visible_until = self._title_visible_until_from_events(
+                title_tokens=title_tokens,
+                word_events=ass_events,
+            )
+            if visible_until is not None:
+                return max(round(visible_until, 2), self.REDDIT_CARD_MIN_VISIBLE_SECONDS)
 
-        estimated_duration = round(title_word_count / 2.9, 2)
-        return min(
-            max(estimated_duration, self.REDDIT_CARD_MIN_VISIBLE_SECONDS),
-            self.REDDIT_CARD_MAX_VISIBLE_SECONDS,
-        )
+        estimated_duration = round(len(title_tokens) / 2.7, 2)
+        return max(estimated_duration, self.REDDIT_CARD_MIN_VISIBLE_SECONDS)
 
-    def _parse_ass_word_events(self, path: Path) -> list[tuple[float, float]]:
-        cues: list[tuple[float, float]] = []
+    def _parse_ass_word_events(self, path: Path) -> list[tuple[float, float, str]]:
+        cues: list[tuple[float, float, str]] = []
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.startswith("Dialogue:"):
                 continue
@@ -812,7 +873,7 @@ class StoryRenderService:
             if len(parts) < 10:
                 continue
 
-            text = parts[9].strip()
+            text = self._ass_dialogue_plain_text(parts[9].strip())
             if not text:
                 continue
 
@@ -820,9 +881,76 @@ class StoryRenderService:
                 (
                     self._parse_ass_timestamp(parts[1].strip()),
                     self._parse_ass_timestamp(parts[2].strip()),
+                    text,
                 )
             )
         return cues
+
+    def _title_visible_until_from_events(
+        self,
+        *,
+        title_tokens: list[str],
+        word_events: list[tuple[float, float, str]],
+    ) -> float | None:
+        if not title_tokens or not word_events:
+            return None
+
+        matched_index = 0
+        visible_until: float | None = None
+        for start, end, text in word_events:
+            event_tokens = self._normalized_title_tokens(text)
+            if not event_tokens:
+                continue
+
+            for token in event_tokens:
+                if matched_index < len(title_tokens) and token == title_tokens[matched_index]:
+                    matched_index += 1
+                    visible_until = end
+                    if matched_index >= len(title_tokens):
+                        return visible_until
+                elif matched_index == 0:
+                    continue
+                else:
+                    return visible_until
+
+        return visible_until
+
+    def _normalized_title_tokens(self, text: str | None) -> list[str]:
+        if not text:
+            return []
+        normalized: list[str] = []
+        for token in text.split():
+            cleaned = self._normalize_title_token(token)
+            if cleaned:
+                normalized.append(cleaned)
+        return normalized
+
+    def _normalize_title_token(self, token: str) -> str:
+        return "".join(character for character in token.lower() if character.isalnum())
+
+    def _ass_dialogue_plain_text(self, text: str) -> str:
+        plain_text = []
+        in_tag = False
+        for character in text:
+            if character == "{":
+                in_tag = True
+                continue
+            if character == "}":
+                in_tag = False
+                continue
+            if not in_tag:
+                plain_text.append(character)
+        return "".join(plain_text).strip()
+
+    def _parse_srt_timestamp(self, timestamp: str) -> float:
+        hours, minutes, seconds_millis = timestamp.strip().split(":")
+        seconds, milliseconds = seconds_millis.split(",")
+        return (
+            int(hours) * 3600
+            + int(minutes) * 60
+            + int(seconds)
+            + int(milliseconds) / 1000.0
+        )
 
     def _media_duration(self, media_path: Path) -> float | None:
         if not shutil.which("ffprobe") or not media_path.exists():
