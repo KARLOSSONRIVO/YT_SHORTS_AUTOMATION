@@ -85,6 +85,34 @@ class HuggingFaceClient:
         except Exception as exc:
             raise IntegrationError(f"Hugging Face text-to-speech failed: {exc}") from exc
 
+    def text_to_audio(self, *, model: str, prompt: str, parameters: dict[str, Any] | None = None) -> bytes:
+        if not self.token:
+            raise IntegrationError("PY_WORKER_HF_TOKEN is required for Hugging Face text-to-audio inference.")
+
+        payload: dict[str, Any] = {"inputs": prompt}
+        if parameters:
+            payload["parameters"] = parameters
+
+        response = self._request(model, payload)
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("application/json"):
+            try:
+                body = response.json()
+            except json.JSONDecodeError as exc:
+                raise IntegrationError("Hugging Face returned invalid JSON instead of generated audio.") from exc
+            raise IntegrationError(str(body.get("error") or body))
+
+        if not (
+            content_type.startswith("audio/")
+            or content_type.startswith("application/octet-stream")
+            or not content_type
+        ):
+            raise IntegrationError(
+                f"Hugging Face returned '{content_type}' instead of generated audio content."
+            )
+
+        return response.content
+
     def transcribe_audio(self, *, model: str, audio_path: str) -> dict[str, Any]:
         if not self.token:
             raise IntegrationError("PY_WORKER_HF_TOKEN is required for Hugging Face transcription.")

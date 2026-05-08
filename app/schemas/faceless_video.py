@@ -142,9 +142,14 @@ class StoryRenderRequest(BaseModel):
     background_music_path: str | None = None
     background_video_path: str | None = None
     render_mode: str = "scene_images"
+    animation_style: str | None = None
+    animation_intensity: float = Field(default=1.0, ge=0.25, le=2.0)
     use_music: bool = True
     music_volume: float = Field(default=0.15, ge=0.0, le=1.0)
     narration_volume: float = Field(default=1.0, ge=0.0, le=2.0)
+    ambience_audio_paths: list[str] = Field(default_factory=list)
+    ambience_volume: float = Field(default=0.08, ge=0.0, le=1.0)
+    sfx_audio_paths: list[str] = Field(default_factory=list)
     ducking: bool = True
 
 
@@ -165,3 +170,56 @@ class ProjectOutputCleanupRequest(BaseModel):
 class ProjectOutputCleanupResponse(BaseModel):
     project_id: str
     deleted: bool
+
+
+class SceneAmbienceGenerationRequest(BaseModel):
+    job_id: str
+    project_id: str
+    project_title: str | None = None
+    output_bucket: str | None = None
+    scenes: list[FacelessScene] = Field(default_factory=list)
+    output_format: str = "wav"
+    duration_seconds: float | None = Field(default=None, ge=1.0, le=60.0)
+
+
+class GeneratedSceneAmbience(BaseModel):
+    scene_index: int
+    prompt: str
+    audio_path: str
+    audio_url: str | None = None
+    duration_seconds: float
+    cache_key: str
+    cached: bool
+    mood: str
+    environment: str
+    emotional_tone: str
+    tension_level: float
+
+
+class SceneAmbienceGenerationResponse(BaseModel):
+    job_id: str
+    project_id: str
+    ambience: list[GeneratedSceneAmbience] = Field(default_factory=list)
+
+
+class StoryMusicGenerationRequest(BaseModel):
+    job_id: str
+    project_id: str
+    project_title: str | None = None
+    output_bucket: str | None = None
+    scenes: list[FacelessScene] = Field(default_factory=list)
+    prompt: str | None = None
+    mood: str | None = None
+    output_format: str = "wav"
+    duration_seconds: float | None = Field(default=None, ge=5.0, le=120.0)
+
+
+class StoryMusicGenerationResponse(BaseModel):
+    job_id: str
+    project_id: str
+    prompt: str
+    music_path: str
+    music_url: str | None = None
+    duration_seconds: float
+    cache_key: str
+    cached: bool

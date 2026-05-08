@@ -33,8 +33,8 @@ class Settings(BaseSettings):
 
     # Image generation
     image_model_base_url: str | None = None
-    image_model: str = "stabilityai/stable-diffusion-xl-base-1.0"
-    image_model_path: str | None = None  # Set to local SDXL path to run offline
+    image_model: str = "black-forest-labs/FLUX.1-dev"
+    image_model_path: str | None = None  # Local fallback path remains SDXL-specific unless the image service is expanded
 
     # TTS (Kokoro)
     tts_model_path: str | None = None
@@ -47,6 +47,20 @@ class Settings(BaseSettings):
     music_assets_path: str = "assets/music"
     reddit_story_background_video_path: str | None = None
     reddit_story_background_music_path: str | None = None
+
+    # AI-generated cinematic ambience (optional)
+    enable_ai_ambience: bool = False
+    ai_audio_model: str = "stable-audio-open"
+    ai_audio_cache_dir: str = "assets/generated_audio"
+    ai_ambience_volume: float = 0.08
+    ai_audio_duration_seconds: float = 12.0
+    ai_audio_inference_steps: int = 100
+
+    # AI-generated background music (optional, Hugging Face API)
+    enable_ai_music: bool = False
+    ai_music_model: str = "musicgen-small"
+    ai_music_cache_dir: str = "assets/generated_music"
+    ai_music_duration_seconds: float = 30.0
 
     # Whisper (STT)
     whisper_hf_model: str = "openai/whisper-large-v3-turbo"

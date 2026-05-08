@@ -111,7 +111,15 @@ Rules:
 - Create 3 to 8 scenes.
 - Keep every scene narration concise and spoken aloud naturally.
 - Make the full narration long enough to fill roughly {payload.target_duration_seconds} seconds of voice-over.
-- Image prompts must describe visual backgrounds only, with no visible text or logos.
+- Every image prompt must describe one specific frozen visual moment with:
+  - the main subject
+  - the exact action happening
+  - the setting/background
+  - camera framing or angle
+  - lighting / mood
+- Image prompts must be concrete and physically believable, not abstract or symbolic.
+- If the topic is about sports, the prompt must name the correct sport, equipment, field/court, and realistic action pose.
+- Avoid extra limbs, broken anatomy, floating objects, duplicated people, visible text, logos, watermarks, scoreboards, UI overlays, or subtitles.
 - The total scene durations should be close to the target duration.
 - Return JSON only.
 {retry_instruction}

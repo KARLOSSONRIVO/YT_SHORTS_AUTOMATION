@@ -68,7 +68,27 @@ class StoryRenderService:
         audio_duration = self._audio_duration(Path(payload.audio_path))
         music_volume = payload.music_volume if payload.music_volume is not None else self.default_music_volume
         narration_volume = payload.narration_volume if payload.narration_volume is not None else 1.0
-        if self.enable_background_music and payload.use_music:
+        ambience_audio_paths = self._resolve_optional_audio_paths(getattr(payload, "ambience_audio_paths", []))
+        sfx_audio_paths = self._resolve_optional_audio_paths(getattr(payload, "sfx_audio_paths", []))
+        if ambience_audio_paths or sfx_audio_paths:
+            selected_music_path = self._select_music_for_payload(payload) if self.enable_background_music and payload.use_music else None
+            mixed_audio_path = stage_dir / "narration_with_cinematic_layers.wav"
+            try:
+                self.mix_audio_with_cinematic_layers(
+                    narration_path=Path(payload.audio_path),
+                    output_path=mixed_audio_path,
+                    music_path=Path(selected_music_path) if selected_music_path else None,
+                    ambience_paths=ambience_audio_paths,
+                    sfx_paths=sfx_audio_paths,
+                    ducking=payload.ducking and self.enable_audio_ducking,
+                    music_volume=music_volume,
+                    ambience_volume=getattr(payload, "ambience_volume", 0.08),
+                    narration_volume=narration_volume,
+                )
+                render_audio_path = str(mixed_audio_path.resolve())
+            except IntegrationError:
+                render_audio_path = payload.audio_path
+        elif self.enable_background_music and payload.use_music:
             selected_music_path = self._select_music_for_payload(payload)
             if selected_music_path:
                 mixed_audio_path = stage_dir / "narration_with_music.wav"
@@ -150,13 +170,24 @@ class StoryRenderService:
         scene_clip_paths: list[Path] = []
         concat_lines = []
         total_duration = 0.0
+        use_animated_scenes = payload.render_mode in {"animation_story", "animated_scene_images"}
         for index, (image_path, duration) in enumerate(zip(payload.image_paths, planned_durations, strict=True), start=1):
             scene_clip_path = scene_clip_dir / f"scene_{index:02d}.mp4"
-            self._render_scene_clip(
-                image_path=Path(image_path),
-                output_path=scene_clip_path,
-                duration=duration,
-            )
+            if use_animated_scenes:
+                self._render_animated_scene_clip(
+                    image_path=Path(image_path),
+                    output_path=scene_clip_path,
+                    duration=duration,
+                    scene_index=index,
+                    animation_style=payload.animation_style,
+                    animation_intensity=payload.animation_intensity,
+                )
+            else:
+                self._render_scene_clip(
+                    image_path=Path(image_path),
+                    output_path=scene_clip_path,
+                    duration=duration,
+                )
             scene_clip_paths.append(scene_clip_path)
             concat_lines.append(f"file '{scene_clip_path.resolve().as_posix()}'")
             total_duration += duration
@@ -312,6 +343,91 @@ class StoryRenderService:
             f"h={self.SCENE_WORK_HEIGHT}*({zoom_expression}):"
             "eval=frame:flags=lanczos,"
             f"crop={self.SCENE_WORK_WIDTH}:{self.SCENE_WORK_HEIGHT}:(iw-{self.SCENE_WORK_WIDTH})/2:(ih-{self.SCENE_WORK_HEIGHT})/2,"
+            "scale=1080:1920:flags=lanczos,"
+            f"trim=duration={duration},"
+            "setpts=PTS-STARTPTS,"
+            f"fade=t=in:st=0:d={fade_in},"
+            f"fade=t=out:st={fade_out_start}:d={fade_out},"
+            "format=yuv420p"
+        )
+
+        self.ffmpeg_client.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loop",
+                "1",
+                "-i",
+                str(image_path),
+                "-vf",
+                scene_filter,
+                "-t",
+                str(duration),
+                "-an",
+                "-r",
+                str(self.SCENE_FPS),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                str(output_path),
+            ]
+        )
+
+    def _render_animated_scene_clip(
+        self,
+        *,
+        image_path: Path,
+        output_path: Path,
+        duration: float,
+        scene_index: int,
+        animation_style: str | None = None,
+        animation_intensity: float = 1.0,
+    ) -> None:
+        if duration <= 0:
+            raise ValidationError("Scene duration must be greater than zero.")
+
+        frame_count = max(int(round(duration * self.SCENE_FPS)), 1)
+        progress_denominator = max(frame_count - 1, 1)
+        intensity = min(max(animation_intensity, 0.25), 2.0)
+        style = (animation_style or "cinematic").strip().lower()
+        fade_in = min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
+        fade_out = min(self.SCENE_FADE_OUT_SECONDS, max(duration * 0.22, 0.08))
+        fade_out_start = max(duration - fade_out, 0.0)
+
+        zoom_start = 1.03
+        zoom_end = 1.11 + (0.035 * intensity)
+        if "slow" in style or "subtle" in style:
+            zoom_end = 1.08 + (0.02 * intensity)
+        if "dramatic" in style or "action" in style:
+            zoom_end = 1.16 + (0.04 * intensity)
+
+        zoom_expression = f"{zoom_start}+({zoom_end - zoom_start})*(n/{progress_denominator})"
+        pan_distance = max(int(42 * intensity), 12)
+        pan_direction = scene_index % 4
+        if pan_direction == 0:
+            x_expression = f"(iw-{self.SCENE_WORK_WIDTH})/2+{pan_distance}*(n/{progress_denominator})"
+            y_expression = f"(ih-{self.SCENE_WORK_HEIGHT})/2"
+        elif pan_direction == 1:
+            x_expression = f"(iw-{self.SCENE_WORK_WIDTH})/2-{pan_distance}*(n/{progress_denominator})"
+            y_expression = f"(ih-{self.SCENE_WORK_HEIGHT})/2"
+        elif pan_direction == 2:
+            x_expression = f"(iw-{self.SCENE_WORK_WIDTH})/2"
+            y_expression = f"(ih-{self.SCENE_WORK_HEIGHT})/2+{pan_distance}*(n/{progress_denominator})"
+        else:
+            x_expression = f"(iw-{self.SCENE_WORK_WIDTH})/2"
+            y_expression = f"(ih-{self.SCENE_WORK_HEIGHT})/2-{pan_distance}*(n/{progress_denominator})"
+
+        scene_filter = (
+            f"scale={self.SCENE_WORK_WIDTH + pan_distance * 4}:{self.SCENE_WORK_HEIGHT + pan_distance * 4}:"
+            "force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={self.SCENE_WORK_WIDTH + pan_distance * 2}:{self.SCENE_WORK_HEIGHT + pan_distance * 2},"
+            f"scale=w={self.SCENE_WORK_WIDTH + pan_distance * 2}*({zoom_expression}):"
+            f"h={self.SCENE_WORK_HEIGHT + pan_distance * 2}*({zoom_expression}):"
+            "eval=frame:flags=lanczos,"
+            f"crop={self.SCENE_WORK_WIDTH}:{self.SCENE_WORK_HEIGHT}:{x_expression}:{y_expression},"
             "scale=1080:1920:flags=lanczos,"
             f"trim=duration={duration},"
             "setpts=PTS-STARTPTS,"
@@ -1014,3 +1130,118 @@ class StoryRenderService:
 
     def _guess_subreddit_from_title(self) -> str:
         return "Trending story"
+
+    def _resolve_optional_audio_paths(self, paths: list[str] | None) -> list[Path]:
+        resolved_paths: list[Path] = []
+        for raw_path in paths or []:
+            path = Path(raw_path)
+            if path.exists():
+                resolved_paths.append(path.resolve())
+        return resolved_paths
+
+    def mix_audio_with_cinematic_layers(
+        self,
+        *,
+        narration_path: Path,
+        output_path: Path,
+        music_path: Path | None = None,
+        ambience_paths: list[Path] | None = None,
+        sfx_paths: list[Path] | None = None,
+        ducking: bool = True,
+        music_volume: float = 0.15,
+        ambience_volume: float = 0.08,
+        narration_volume: float = 1.0,
+        fade_seconds: float = 1.5,
+    ) -> None:
+        narration_duration = self._audio_duration(narration_path)
+        if narration_duration is None:
+            raise IntegrationError("Narration duration could not be determined for ambience mixing.")
+
+        music_volume = min(max(music_volume, 0.0), 1.0)
+        ambience_volume = min(max(ambience_volume, 0.0), 1.0)
+        narration_volume = min(max(narration_volume, 0.0), 2.0)
+        ambience_paths = ambience_paths or []
+        sfx_paths = sfx_paths or []
+
+        command = ["ffmpeg", "-y", "-i", str(narration_path)]
+        filter_parts = [
+            "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"volume={narration_volume}[narr]"
+        ]
+        bed_labels: list[str] = []
+        input_index = 1
+
+        if music_path and music_path.exists():
+            music_start_offset = round(
+                random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
+                2,
+            )
+            command.extend(["-stream_loop", "-1", "-i", str(music_path)])
+            filter_parts.append(
+                f"[{input_index}:a]aresample=44100,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"atrim=start={music_start_offset}:duration={narration_duration},"
+                f"asetpts=PTS-STARTPTS,volume={music_volume}[music]"
+            )
+            bed_labels.append("[music]")
+            input_index += 1
+
+        fade_out_start = max(narration_duration - fade_seconds, 0.0)
+        for ambience_index, ambience_path in enumerate(ambience_paths):
+            command.extend(["-stream_loop", "-1", "-i", str(ambience_path)])
+            label = f"amb{ambience_index}"
+            filter_parts.append(
+                f"[{input_index}:a]aresample=44100,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS,"
+                f"afade=t=in:st=0:d={fade_seconds},"
+                f"afade=t=out:st={fade_out_start}:d={fade_seconds},"
+                f"volume={ambience_volume}[{label}]"
+            )
+            bed_labels.append(f"[{label}]")
+            input_index += 1
+
+        for sfx_index, sfx_path in enumerate(sfx_paths):
+            command.extend(["-i", str(sfx_path)])
+            label = f"sfx{sfx_index}"
+            filter_parts.append(
+                f"[{input_index}:a]aresample=44100,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS[{label}]"
+            )
+            bed_labels.append(f"[{label}]")
+            input_index += 1
+
+        if bed_labels:
+            filter_parts.append(
+                "".join(bed_labels)
+                + f"amix=inputs={len(bed_labels)}:duration=first:dropout_transition=0[bed]"
+            )
+            if ducking:
+                filter_parts.append(
+                    "[bed][narr]sidechaincompress=threshold=0.02:ratio=6:attack=20:release=250[duckedbed]"
+                )
+                filter_parts.append(
+                    "[narr][duckedbed]amix=inputs=2:duration=first:dropout_transition=0,"
+                    "alimiter=limit=0.95[aout]"
+                )
+            else:
+                filter_parts.append(
+                    "[narr][bed]amix=inputs=2:duration=first:dropout_transition=0,"
+                    "alimiter=limit=0.95[aout]"
+                )
+        else:
+            filter_parts.append("[narr]alimiter=limit=0.95[aout]")
+
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                "[aout]",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ]
+        )
+        self.ffmpeg_client.run(command)

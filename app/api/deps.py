@@ -14,6 +14,9 @@ from app.services.clip_detection_service import ClipDetectionService
 from app.services.clip_ranking_service import ClipRankingService
 from app.services.hook_scoring_service import HookScoringService
 from app.services.faceless_subtitle_service import FacelessSubtitleService
+from app.services.ai_audio_service import AIAudioService
+from app.services.ai_music_service import AIMusicService
+from app.services.audio_scene_analysis_service import AudioSceneAnalysisService
 from app.services.image_service import ImageService
 from app.services.local_media_store_service import LocalMediaStoreService
 from app.services.music_service import MusicService
@@ -215,6 +218,42 @@ def get_story_render_service() -> StoryRenderService:
 def get_music_service() -> MusicService:
     settings = get_settings()
     return MusicService(music_assets_path=settings.music_assets_path)
+
+
+@lru_cache
+def get_audio_scene_analysis_service() -> AudioSceneAnalysisService:
+    return AudioSceneAnalysisService()
+
+
+@lru_cache
+def get_ai_audio_service() -> AIAudioService:
+    settings = get_settings()
+    return AIAudioService(
+        huggingface_client=get_huggingface_client(),
+        ffmpeg_client=get_ffmpeg_client(),
+        scene_analysis_service=get_audio_scene_analysis_service(),
+        cache_dir=settings.ai_audio_cache_dir,
+        model=settings.ai_audio_model,
+        enabled=settings.enable_ai_ambience,
+        ambience_volume=settings.ai_ambience_volume,
+        default_duration_seconds=settings.ai_audio_duration_seconds,
+        inference_steps=settings.ai_audio_inference_steps,
+        allow_placeholder_generation=settings.allow_placeholder_generation,
+    )
+
+
+@lru_cache
+def get_ai_music_service() -> AIMusicService:
+    settings = get_settings()
+    return AIMusicService(
+        huggingface_client=get_huggingface_client(),
+        ffmpeg_client=get_ffmpeg_client(),
+        cache_dir=settings.ai_music_cache_dir,
+        model=settings.ai_music_model,
+        enabled=settings.enable_ai_music,
+        default_duration_seconds=settings.ai_music_duration_seconds,
+        allow_placeholder_generation=settings.allow_placeholder_generation,
+    )
 
 
 def get_transcription_pipeline() -> TranscriptionPipeline:

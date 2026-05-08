@@ -1,8 +1,11 @@
 import shutil
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
 from app.api.deps import (
+    get_ai_audio_service,
+    get_ai_music_service,
     get_faceless_subtitle_service,
     get_image_service,
     get_llm_service,
@@ -12,12 +15,17 @@ from app.api.deps import (
 from app.schemas.faceless_video import (
     AudioGenerationRequest,
     AudioGenerationResponse,
+    GeneratedSceneAmbience,
+    SceneAmbienceGenerationRequest,
+    SceneAmbienceGenerationResponse,
     SceneImageGenerationRequest,
     SceneImageGenerationResponse,
     ScriptGenerationRequest,
     ScriptGenerationResponse,
     StoryRenderRequest,
     StoryRenderResponse,
+    StoryMusicGenerationRequest,
+    StoryMusicGenerationResponse,
     StorySubtitleGenerationRequest,
     StorySubtitleGenerationResponse,
     ProjectOutputCleanupRequest,
@@ -26,12 +34,14 @@ from app.schemas.faceless_video import (
     VoicePreviewRequest,
     VoicePreviewResponse,
 )
+from app.services.ai_audio_service import AIAudioService
+from app.services.ai_music_service import AIMusicService
 from app.services.faceless_subtitle_service import FacelessSubtitleService
 from app.services.image_service import ImageService
 from app.services.llm_service import LLMService
 from app.services.story_render_service import StoryRenderService
 from app.services.tts_service import TTSService
-from app.utils.output_paths import iter_project_output_roots
+from app.utils.output_paths import iter_project_output_roots, output_url
 
 router = APIRouter(prefix="/faceless")
 
@@ -83,6 +93,65 @@ async def generate_scenes(
     return image_service.generate_scene_images(payload)
 
 
+@router.post("/generate-ambience", response_model=SceneAmbienceGenerationResponse)
+async def generate_ambience(
+    payload: SceneAmbienceGenerationRequest,
+    ai_audio_service: AIAudioService = Depends(get_ai_audio_service),
+) -> SceneAmbienceGenerationResponse:
+    ambience: list[GeneratedSceneAmbience] = []
+    for scene in payload.scenes:
+        generated = ai_audio_service.generate_ambience(
+            scene,
+            duration_seconds=payload.duration_seconds or scene.duration_seconds,
+            output_format=payload.output_format,
+        )
+        ambience.append(
+            GeneratedSceneAmbience(
+                scene_index=scene.scene_index,
+                prompt=generated["prompt"],
+                audio_path=generated["audio_path"],
+                audio_url=_audio_output_url(generated["audio_path"]),
+                duration_seconds=generated["duration_seconds"],
+                cache_key=generated["cache_key"],
+                cached=generated["cached"],
+                mood=generated["mood"],
+                environment=generated["environment"],
+                emotional_tone=generated["emotional_tone"],
+                tension_level=generated["tension_level"],
+            )
+        )
+
+    return SceneAmbienceGenerationResponse(
+        job_id=payload.job_id,
+        project_id=payload.project_id,
+        ambience=ambience,
+    )
+
+
+@router.post("/generate-music", response_model=StoryMusicGenerationResponse)
+async def generate_music(
+    payload: StoryMusicGenerationRequest,
+    ai_music_service: AIMusicService = Depends(get_ai_music_service),
+) -> StoryMusicGenerationResponse:
+    generated = ai_music_service.generate_music(
+        scenes=payload.scenes,
+        prompt=payload.prompt,
+        mood=payload.mood,
+        duration_seconds=payload.duration_seconds,
+        output_format=payload.output_format,
+    )
+    return StoryMusicGenerationResponse(
+        job_id=payload.job_id,
+        project_id=payload.project_id,
+        prompt=generated["prompt"],
+        music_path=generated["music_path"],
+        music_url=_audio_output_url(generated["music_path"]),
+        duration_seconds=generated["duration_seconds"],
+        cache_key=generated["cache_key"],
+        cached=generated["cached"],
+    )
+
+
 @router.post("/render", response_model=StoryRenderResponse)
 async def render_story(
     payload: StoryRenderRequest,
@@ -110,3 +179,16 @@ async def cleanup_project_output(
 
     deleted = all(not output_root.exists() for output_root in output_roots)
     return ProjectOutputCleanupResponse(project_id=payload.project_id, deleted=deleted)
+
+
+def _audio_output_url(audio_path: str) -> str | None:
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    resolved_audio_path = Path(audio_path).resolve()
+    output_root = Path(settings.output_dir).resolve()
+    try:
+        resolved_audio_path.relative_to(output_root)
+    except ValueError:
+        return None
+    return output_url(output_dir=settings.output_dir, file_path=resolved_audio_path)

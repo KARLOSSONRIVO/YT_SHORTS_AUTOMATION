@@ -511,3 +511,121 @@ class RenderService:
                 return round(frame_count / float(frame_rate), 2)
         except (FileNotFoundError, wave.Error):
             return None
+
+    def load_ai_ambience_tracks(self, ambience_paths: list[str] | None) -> list[Path]:
+        tracks: list[Path] = []
+        for raw_path in ambience_paths or []:
+            path = Path(raw_path)
+            if path.exists():
+                tracks.append(path.resolve())
+        return tracks
+
+    def mix_audio_with_ambience(
+        self,
+        *,
+        narration_path: Path,
+        ambience_paths: list[Path],
+        output_path: Path,
+        music_path: Path | None = None,
+        sfx_paths: list[Path] | None = None,
+        ducking: bool = True,
+        music_volume: float = 0.15,
+        ambience_volume: float = 0.08,
+        narration_volume: float = 1.0,
+        fade_seconds: float = 1.5,
+    ) -> None:
+        narration_duration = self._audio_duration(narration_path)
+        if narration_duration is None:
+            raise IntegrationError("Narration duration could not be determined for ambience mixing.")
+
+        music_volume = min(max(music_volume, 0.0), 1.0)
+        ambience_volume = min(max(ambience_volume, 0.0), 1.0)
+        narration_volume = min(max(narration_volume, 0.0), 2.0)
+        sfx_paths = sfx_paths or []
+
+        command = ["ffmpeg", "-y", "-i", str(narration_path)]
+        filter_parts = [
+            "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"volume={narration_volume}[narr]"
+        ]
+        bed_labels: list[str] = []
+        input_index = 1
+
+        if music_path and music_path.exists():
+            music_start_offset = round(
+                random.uniform(self.MUSIC_MIN_START_OFFSET_SECONDS, self.MUSIC_MAX_START_OFFSET_SECONDS),
+                2,
+            )
+            command.extend(["-stream_loop", "-1", "-i", str(music_path)])
+            filter_parts.append(
+                f"[{input_index}:a]aresample=44100,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"atrim=start={music_start_offset}:duration={narration_duration},"
+                f"asetpts=PTS-STARTPTS,volume={music_volume}[music]"
+            )
+            bed_labels.append("[music]")
+            input_index += 1
+
+        fade_out_start = max(narration_duration - fade_seconds, 0.0)
+        for ambience_index, ambience_path in enumerate(ambience_paths):
+            if not ambience_path.exists():
+                continue
+            command.extend(["-stream_loop", "-1", "-i", str(ambience_path)])
+            label = f"amb{ambience_index}"
+            filter_parts.append(
+                f"[{input_index}:a]aresample=44100,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS,"
+                f"afade=t=in:st=0:d={fade_seconds},"
+                f"afade=t=out:st={fade_out_start}:d={fade_seconds},"
+                f"volume={ambience_volume}[{label}]"
+            )
+            bed_labels.append(f"[{label}]")
+            input_index += 1
+
+        for sfx_index, sfx_path in enumerate(sfx_paths):
+            if not sfx_path.exists():
+                continue
+            command.extend(["-i", str(sfx_path)])
+            label = f"sfx{sfx_index}"
+            filter_parts.append(
+                f"[{input_index}:a]aresample=44100,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"atrim=duration={narration_duration},asetpts=PTS-STARTPTS[{label}]"
+            )
+            bed_labels.append(f"[{label}]")
+            input_index += 1
+
+        if bed_labels:
+            filter_parts.append(
+                "".join(bed_labels)
+                + f"amix=inputs={len(bed_labels)}:duration=first:dropout_transition=0[bed]"
+            )
+            if ducking:
+                filter_parts.append(
+                    "[bed][narr]sidechaincompress=threshold=0.02:ratio=6:attack=20:release=250[duckedbed]"
+                )
+                filter_parts.append(
+                    "[narr][duckedbed]amix=inputs=2:duration=first:dropout_transition=0,"
+                    "alimiter=limit=0.95[aout]"
+                )
+            else:
+                filter_parts.append(
+                    "[narr][bed]amix=inputs=2:duration=first:dropout_transition=0,"
+                    "alimiter=limit=0.95[aout]"
+                )
+        else:
+            filter_parts.append("[narr]alimiter=limit=0.95[aout]")
+
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                "[aout]",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ]
+        )
+        self.ffmpeg_client.run(command)

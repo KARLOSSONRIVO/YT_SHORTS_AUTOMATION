@@ -1,6 +1,7 @@
 from io import BytesIO
 from pathlib import Path
 import logging
+import re
 
 from app.core.exceptions import IntegrationError, PaymentRequiredError
 from app.integrations.huggingface_client import HuggingFaceClient
@@ -52,7 +53,10 @@ class ImageService:
 
         for index, scene in enumerate(payload.scenes):
             output_path = stage_dir / f"scene_{scene.scene_index:02d}.png"
-            prompt = f"{payload.visual_style}, {scene.image_prompt}, vertical 9:16, no text, no logos"
+            prompt = self._compose_generation_prompt(
+                visual_style=payload.visual_style,
+                scene_prompt=scene.image_prompt,
+            )
             try:
                 output_path.write_bytes(self._generate_image(prompt))
             except Exception as exc:
@@ -76,6 +80,70 @@ class ImageService:
             project_id=payload.project_id,
             images=images,
         )
+
+    def _compose_generation_prompt(self, *, visual_style: str, scene_prompt: str) -> str:
+        normalized_prompt = re.sub(r"\s+", " ", scene_prompt).strip()
+        normalized_style = re.sub(r"\s+", " ", visual_style).strip()
+        realism_boost = (
+            "photorealistic, anatomically correct body proportions, realistic hands and feet, "
+            "natural facial features, believable motion freeze, clean composition, high detail"
+        )
+        negative_constraints = (
+            "no text, no logos, no watermarks, no subtitles, no scoreboard overlay, no UI, "
+            "no duplicated subjects, no extra limbs, no distorted anatomy, no floating objects"
+        )
+        domain_boost = self._domain_specific_boost(normalized_prompt)
+
+        parts = [
+            normalized_style,
+            normalized_prompt,
+            domain_boost,
+            realism_boost,
+            "vertical 9:16 frame",
+            negative_constraints,
+        ]
+        return ", ".join(part for part in parts if part)
+
+    def _domain_specific_boost(self, prompt: str) -> str:
+        lowered = prompt.lower()
+        sports_terms = {
+            "soccer": (
+                "realistic association football scene, regulation soccer ball, believable stadium perspective, "
+                "athlete in a plausible kicking or sprinting pose, correct goal or pitch context"
+            ),
+            "football": (
+                "realistic American football scene, regulation field markings, believable tackle or run pose, "
+                "correct protective gear, stadium action photo feel"
+            ),
+            "basketball": (
+                "realistic basketball scene, correct court markings, believable dribble, layup, dunk, or defensive stance, "
+                "arena sports photography look"
+            ),
+            "baseball": (
+                "realistic baseball scene, accurate bat or glove use, believable pitching or batting pose, "
+                "regulation field context"
+            ),
+            "boxing": (
+                "realistic boxing scene, accurate gloves, ring ropes, believable punch or guard stance, "
+                "sports photography lighting"
+            ),
+            "mma": (
+                "realistic MMA fight scene, accurate cage or mat setting, believable guard or striking stance, "
+                "anatomically plausible action"
+            ),
+        }
+
+        for token, boost in sports_terms.items():
+            if token in lowered:
+                return boost
+
+        if any(token in lowered for token in ("news anchor", "broadcast", "interview", "podcast")):
+            return (
+                "realistic documentary still frame, believable person placement, natural studio or interview environment, "
+                "cinematic but grounded composition"
+            )
+
+        return "grounded cinematic still frame, realistic environment and subject placement"
 
     def _generate_image(self, prompt: str) -> bytes:
         """Try HuggingFace first.  Fall back to local SDXL only on 402."""
