@@ -29,6 +29,7 @@ class TimedCue:
     end: float
     text: str
     words: list[TimedWord]
+    whole_line: bool = False
 
 
 class FacelessSubtitleService:
@@ -40,6 +41,7 @@ class FacelessSubtitleService:
     WORD_FADE_OUT_MS = 70
     WORD_HIGHLIGHT_LAG_SECONDS = 0.18
     WORD_HIGHLIGHT_MAX_LAG_RATIO = 0.25
+    TITLE_INTRO_HOLD_SECONDS = 0.35
 
     def __init__(
         self,
@@ -67,8 +69,11 @@ class FacelessSubtitleService:
             stage_name="subtitles",
         )
         stage_dir.mkdir(parents=True, exist_ok=True)
-        timed_cues = self._build_timed_cues(payload)
-        cues = [SubtitleCue(index=cue.index, start=cue.start, end=cue.end, text=cue.text) for cue in timed_cues]
+        timed_cues = self._collapse_opening_full_line(self._build_timed_cues(payload), payload)
+        cues = [
+            SubtitleCue(index=cue.index, start=cue.start, end=cue.end, text=self._clean_display_text(cue.text))
+            for cue in timed_cues
+        ]
 
         srt_path = stage_dir / "subtitles.srt"
         ass_path = stage_dir / "subtitles.ass"
@@ -161,6 +166,7 @@ class FacelessSubtitleService:
                     end=round(float(end), 2),
                     text=text,
                     words=words,
+                    whole_line=False,
                 )
             )
 
@@ -178,6 +184,7 @@ class FacelessSubtitleService:
                     end=round(cursor + duration, 2),
                     text=scene.caption_text or scene.narration,
                     words=[],
+                    whole_line=False,
                 )
             )
             cursor += duration
@@ -215,6 +222,7 @@ class FacelessSubtitleService:
                     end=round(max(cue.end * scale, cue.start * scale + 0.1), 2),
                     text=cue.text,
                     words=normalized_words,
+                    whole_line=cue.whole_line,
                 )
             )
         return normalized
@@ -241,6 +249,7 @@ class FacelessSubtitleService:
                     end=round(float(end), 2),
                     text=text,
                     words=[],
+                    whole_line=False,
                 )
             )
         return cues
@@ -275,11 +284,96 @@ class FacelessSubtitleService:
                     end=round(cursor + duration, 2),
                     text=cue_text,
                     words=[],
+                    whole_line=False,
                 )
             )
             cursor += duration
 
         return cues
+
+    def _collapse_opening_full_line(
+        self,
+        cues: list[TimedCue],
+        payload: StorySubtitleGenerationRequest,
+    ) -> list[TimedCue]:
+        if not cues or not payload.scenes:
+            return cues
+
+        first_scene = payload.scenes[0]
+        opening_text = (payload.opening_display_text or payload.project_title or "").strip()
+        if not opening_text:
+            return cues
+
+        scene_opening_text = (first_scene.caption_text or first_scene.narration or "").strip()
+        if not scene_opening_text:
+            return cues
+
+        normalized_opening_text = self._normalize_text(opening_text)
+        normalized_scene_opening_text = self._normalize_text(scene_opening_text)
+        if (
+            normalized_opening_text != normalized_scene_opening_text
+            and not normalized_scene_opening_text.startswith(normalized_opening_text)
+            and not normalized_opening_text.startswith(normalized_scene_opening_text)
+        ):
+            return cues
+
+        opening_visible_until = max(float(first_scene.duration_seconds), 0.1)
+        opening_cues = [cue for cue in cues if cue.start < opening_visible_until]
+        if not opening_cues:
+            return cues
+
+        actual_opening_end = round(
+            max(max(cue.end for cue in opening_cues), opening_visible_until) + self.TITLE_INTRO_HOLD_SECONDS,
+            2,
+        )
+        collapsed_opening_cue = TimedCue(
+            index=1,
+            start=0.0,
+            end=actual_opening_end,
+            text=opening_text,
+            words=[],
+            whole_line=True,
+        )
+
+        remaining: list[TimedCue] = []
+        for cue in cues:
+            if cue.end <= actual_opening_end:
+                continue
+
+            if cue.start < actual_opening_end:
+                clipped_words = [
+                    TimedWord(
+                        start=round(max(word.start, actual_opening_end), 2),
+                        end=word.end,
+                        text=word.text,
+                    )
+                    for word in cue.words
+                    if word.end > actual_opening_end
+                ]
+                cue = TimedCue(
+                    index=cue.index,
+                    start=actual_opening_end,
+                    end=cue.end,
+                    text=" ".join(word.text for word in clipped_words).strip() or cue.text,
+                    words=clipped_words,
+                    whole_line=cue.whole_line,
+                )
+
+            remaining.append(cue)
+
+        normalized_cues = [collapsed_opening_cue]
+        for index, cue in enumerate(remaining, start=2):
+            normalized_cues.append(
+                TimedCue(
+                    index=index,
+                    start=cue.start,
+                    end=cue.end,
+                    text=cue.text,
+                    words=cue.words,
+                    whole_line=cue.whole_line,
+                )
+            )
+        return normalized_cues
 
     def _audio_duration(self, audio_path: Path) -> float | None:
         try:
@@ -340,10 +434,13 @@ class FacelessSubtitleService:
         )
 
     def _cue_to_ass_events(self, cue: TimedCue, payload: StorySubtitleGenerationRequest) -> list[str]:
+        if cue.whole_line:
+            return [self._full_line_event(cue.text, cue.start, cue.end)]
+
         if cue.words:
             return self._word_timed_events(cue, payload)
 
-        tokens = cue.text.split()
+        tokens = self._clean_display_text(cue.text).split()
         if not tokens:
             return []
 
@@ -357,7 +454,11 @@ class FacelessSubtitleService:
         ]
 
     def _word_timed_events(self, cue: TimedCue, payload: StorySubtitleGenerationRequest) -> list[str]:
-        words = [word for word in cue.words if word.text]
+        words = [
+            TimedWord(start=word.start, end=word.end, text=self._clean_display_text(word.text))
+            for word in cue.words
+            if self._clean_display_text(word.text)
+        ]
         if not words:
             return self._cue_to_ass_events(
                 TimedCue(index=cue.index, start=cue.start, end=cue.end, text=cue.text, words=[]),
@@ -436,6 +537,15 @@ class FacelessSubtitleService:
             f"Default,,0,0,0,,{style_tag}{escaped}{{\\rDefault}}"
         )
 
+    def _full_line_event(self, text: str, start: float, end: float) -> str:
+        escaped = self._escape_ass_text(self._clean_display_text(text))
+        return (
+            "Dialogue: 0,"
+            f"{self._format_ass_timestamp(start)},"
+            f"{self._format_ass_timestamp(end)},"
+            f"Default,,0,0,0,,{escaped}"
+        )
+
     def _ass_alignment(self, position: str | None) -> int:
         if position == "top_center":
             return 8
@@ -455,6 +565,14 @@ class FacelessSubtitleService:
         escaped = escaped.replace("{", r"\{")
         escaped = escaped.replace("}", r"\}")
         return escaped
+
+    def _normalize_text(self, value: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s']+", " ", value.lower())).strip()
+
+    def _clean_display_text(self, value: str) -> str:
+        cleaned = re.sub(r"[_\W]+", " ", value, flags=re.UNICODE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned or value.strip()
 
     def _hex_to_ass_color(self, value: str) -> str:
         cleaned = value.strip().lstrip("#")

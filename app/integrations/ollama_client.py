@@ -19,7 +19,7 @@ class OllamaClient:
         self,
         *,
         base_url: str,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float | None = 300.0,
         max_retries: int = 2,
     ) -> None:
         # Accept URLs like "http://host:11434/v1" or "http://host:11434"
@@ -27,7 +27,7 @@ class OllamaClient:
         cleaned = base_url.rstrip("/")
         cleaned = re.sub(r"/v\d+$", "", cleaned)  # strip trailing /v1, /v2, etc.
         self.base_url = cleaned
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
         self.max_retries = max_retries
 
     def generate_text(

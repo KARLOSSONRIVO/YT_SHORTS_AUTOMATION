@@ -19,6 +19,7 @@ class ScriptGenerationRequest(BaseModel):
     target_duration_seconds: int = Field(default=45, ge=15, le=180)
     style_preset: str = "cinematic documentary"
     audience: str | None = None
+    script_framework: str = "standard_story"
 
 
 class ScriptGenerationResponse(BaseModel):
@@ -83,6 +84,7 @@ class StorySubtitleGenerationRequest(BaseModel):
     job_id: str
     project_id: str
     project_title: str | None = None
+    opening_display_text: str | None = None
     output_bucket: str | None = None
     audio_path: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
@@ -130,6 +132,34 @@ class SceneImageGenerationResponse(BaseModel):
     images: list[GeneratedSceneImage] = Field(default_factory=list)
 
 
+class SceneAnimationGenerationRequest(BaseModel):
+    job_id: str
+    project_id: str
+    project_title: str | None = None
+    output_bucket: str | None = None
+    scenes: list[FacelessScene] = Field(default_factory=list)
+    images: list[GeneratedSceneImage] = Field(default_factory=list)
+    animation_style: str = "cinematic story animation"
+    num_frames: int | None = Field(default=None, ge=8, le=160)
+    num_inference_steps: int | None = Field(default=None, ge=1, le=80)
+    guidance_scale: float | None = Field(default=None, ge=0.0, le=20.0)
+
+
+class GeneratedSceneAnimation(BaseModel):
+    scene_index: int
+    prompt: str
+    source_image_path: str
+    video_path: str
+    video_url: str
+    cache_key: str
+
+
+class SceneAnimationGenerationResponse(BaseModel):
+    job_id: str
+    project_id: str
+    animations: list[GeneratedSceneAnimation] = Field(default_factory=list)
+
+
 class StoryRenderRequest(BaseModel):
     job_id: str
     project_id: str
@@ -137,6 +167,7 @@ class StoryRenderRequest(BaseModel):
     output_bucket: str | None = None
     scenes: list[FacelessScene] = Field(default_factory=list)
     image_paths: list[str] = Field(default_factory=list)
+    scene_video_paths: list[str] = Field(default_factory=list)
     audio_path: str
     subtitles_path: str | None = None
     background_music_path: str | None = None

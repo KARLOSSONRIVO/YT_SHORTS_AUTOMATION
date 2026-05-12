@@ -14,6 +14,7 @@ from app.services.clip_detection_service import ClipDetectionService
 from app.services.clip_ranking_service import ClipRankingService
 from app.services.hook_scoring_service import HookScoringService
 from app.services.faceless_subtitle_service import FacelessSubtitleService
+from app.services.ai_animation_service import AIAnimationService
 from app.services.ai_audio_service import AIAudioService
 from app.services.ai_music_service import AIMusicService
 from app.services.audio_scene_analysis_service import AudioSceneAnalysisService
@@ -253,6 +254,21 @@ def get_ai_music_service() -> AIMusicService:
         enabled=settings.enable_ai_music,
         default_duration_seconds=settings.ai_music_duration_seconds,
         allow_placeholder_generation=settings.allow_placeholder_generation,
+    )
+
+
+@lru_cache
+def get_ai_animation_service() -> AIAnimationService:
+    settings = get_settings()
+    return AIAnimationService(
+        huggingface_client=get_huggingface_client(),
+        output_dir=settings.output_dir,
+        model=settings.ai_animation_model,
+        cache_dir=settings.ai_animation_cache_dir,
+        enabled=settings.enable_ai_animation,
+        num_frames=settings.ai_animation_num_frames,
+        inference_steps=settings.ai_animation_inference_steps,
+        guidance_scale=settings.ai_animation_guidance_scale,
     )
 
 

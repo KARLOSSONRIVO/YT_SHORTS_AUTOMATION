@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends
 
 from app.api.deps import (
+    get_ai_animation_service,
     get_ai_audio_service,
     get_ai_music_service,
     get_faceless_subtitle_service,
@@ -16,6 +17,8 @@ from app.schemas.faceless_video import (
     AudioGenerationRequest,
     AudioGenerationResponse,
     GeneratedSceneAmbience,
+    SceneAnimationGenerationRequest,
+    SceneAnimationGenerationResponse,
     SceneAmbienceGenerationRequest,
     SceneAmbienceGenerationResponse,
     SceneImageGenerationRequest,
@@ -34,6 +37,7 @@ from app.schemas.faceless_video import (
     VoicePreviewRequest,
     VoicePreviewResponse,
 )
+from app.services.ai_animation_service import AIAnimationService
 from app.services.ai_audio_service import AIAudioService
 from app.services.ai_music_service import AIMusicService
 from app.services.faceless_subtitle_service import FacelessSubtitleService
@@ -91,6 +95,14 @@ async def generate_scenes(
     image_service: ImageService = Depends(get_image_service),
 ) -> SceneImageGenerationResponse:
     return image_service.generate_scene_images(payload)
+
+
+@router.post("/generate-animations", response_model=SceneAnimationGenerationResponse)
+async def generate_animations(
+    payload: SceneAnimationGenerationRequest,
+    ai_animation_service: AIAnimationService = Depends(get_ai_animation_service),
+) -> SceneAnimationGenerationResponse:
+    return ai_animation_service.generate_scene_animations(payload)
 
 
 @router.post("/generate-ambience", response_model=SceneAmbienceGenerationResponse)

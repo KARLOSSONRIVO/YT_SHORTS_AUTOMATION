@@ -78,6 +78,26 @@ class LLMService:
                 "- Add meaningful detail to every scene instead of shortening transitions.\n"
             )
 
+        if payload.script_framework == "psychology_truth":
+            return self._build_psychology_truth_prompt(
+                payload,
+                target_word_count=target_word_count,
+                retry_instruction=retry_instruction,
+            )
+
+        return self._build_standard_story_prompt(
+            payload,
+            target_word_count=target_word_count,
+            retry_instruction=retry_instruction,
+        )
+
+    def _build_standard_story_prompt(
+        self,
+        payload: ScriptGenerationRequest,
+        *,
+        target_word_count: int,
+        retry_instruction: str,
+    ) -> str:
         return f"""
 You generate short-form faceless story videos for YouTube Shorts and TikTok.
 Return only valid JSON. Do not wrap it in markdown.
@@ -125,6 +145,76 @@ Rules:
 {retry_instruction}
 """.strip()
 
+    def _build_psychology_truth_prompt(
+        self,
+        payload: ScriptGenerationRequest,
+        *,
+        target_word_count: int,
+        retry_instruction: str,
+    ) -> str:
+        return f"""
+You generate retention-first faceless psychology shorts for YouTube Shorts and TikTok.
+Return only valid JSON. Do not wrap it in markdown.
+
+Required JSON shape:
+{{
+  "title": "short curiosity title for the project metadata",
+  "hook": "first sentence that grabs attention immediately",
+  "narration": "full narration script",
+  "caption_text": "short social caption",
+  "scenes": [
+    {{
+      "scene_index": 1,
+      "narration": "scene narration",
+      "image_prompt": "vertical 9:16 cinematic visual prompt, no text, no logos",
+      "duration_seconds": 6,
+      "caption_text": "short subtitle text"
+    }}
+  ]
+}}
+
+Topic: {payload.topic}
+Tone: {payload.tone}
+Language: {payload.language}
+Target duration seconds: {payload.target_duration_seconds}
+Approximate target spoken word count: {target_word_count}
+Visual style preset: {payload.style_preset}
+Audience: {payload.audience or "viewers who respond to blunt psychology truths"}
+
+Beat formula to follow:
+1. Opening hook: a harsh truth, ego hit, pain-point, or uncomfortable question.
+2. Set up the conflict: explain the psychological pattern and why it matters personally.
+3. Mid-video hook #1: pattern interrupt or sharper reframing.
+4. Truth bomb: one uncomfortable but believable psychology fact.
+5. Mid-video hook #2: curiosity spike that raises the stakes.
+6. Breakdown: explain why the brain or mind behaves this way in simple emotional language.
+7. Wake-up slap: one line that feels confronting but useful.
+8. Solution: one specific mindset shift or action.
+9. Closing hook: a final emotional line that lingers, not a generic call to action.
+
+Rules:
+- Start directly with the spoken hook. Do NOT speak the title in the narration.
+- Create 6 to 8 scenes.
+- Each scene should map naturally to one of the beats above.
+- Make the script sound like a smooth spoken short, not labeled sections.
+- The hook must land in the very first sentence.
+- The truth bomb should be emotionally sharp but not melodramatic.
+- The solution must be practical and specific.
+- The closing line should feel like a final mental punch.
+- Make the full narration long enough to fill roughly {payload.target_duration_seconds} seconds of voice-over.
+- Every image prompt must describe one specific frozen visual moment with:
+  - the main subject
+  - the exact action happening
+  - the setting/background
+  - camera framing or angle
+  - lighting / mood
+- For psychology scenes, prefer realistic human behavior, body language, tension, reflection, confrontation, isolation, social pressure, rejection, or breakthrough moments.
+- Avoid extra limbs, broken anatomy, floating objects, duplicated people, visible text, logos, watermarks, scoreboards, UI overlays, or subtitles.
+- The total scene durations should be close to the target duration.
+- Return JSON only.
+{retry_instruction}
+""".strip()
+
     def _parse_response(
         self,
         payload: ScriptGenerationRequest,
@@ -151,6 +241,12 @@ Rules:
         title = str(data.get("title") or payload.topic).strip()
         hook = str(data.get("hook") or scenes[0].narration).strip()
         caption_text = str(data.get("caption_text") or hook).strip()
+
+        if payload.script_framework == "psychology_truth":
+            hook = self._normalize_psychology_hook(payload.topic, hook)
+            title = self._normalize_psychology_title(payload.topic, title)
+            narration = self._ensure_psychology_hook_lead(hook, narration)
+            scenes = self._ensure_psychology_scene_lead(hook, scenes)
 
         return ScriptGenerationResponse(
             job_id=payload.job_id,
@@ -204,6 +300,9 @@ Rules:
         return data
 
     def _generate_placeholder_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
+        if payload.script_framework == "psychology_truth":
+            return self._generate_placeholder_psychology_script(payload)
+
         topic = payload.topic.strip()
         audience = f" for {payload.audience.strip()}" if payload.audience else ""
         scene_count = min(max(round(payload.target_duration_seconds / 7), 3), 8)
@@ -254,3 +353,123 @@ Rules:
             image_prompts=[scene.image_prompt for scene in scenes],
             caption_text=f"{hook} #{topic.replace(' ', '')[:32]}",
         )
+
+    def _generate_placeholder_psychology_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
+        topic = payload.topic.strip()
+        tone = (payload.tone or "direct, emotionally honest").strip()
+        scene_count = min(max(round(payload.target_duration_seconds / 7), 6), 8)
+        scene_duration = max(payload.target_duration_seconds / scene_count, 3)
+
+        title = f"The psychology behind {topic.lower()}"
+        hook = f"If you keep struggling with {topic}, this harsh psychology truth is going to hurt."
+        beats = [
+            hook,
+            f"Psychologists would tell you this pattern around {topic} isn't random. It quietly shapes your confidence, your habits, and your relationships.",
+            "But here's where it gets worse: your brain confuses what feels familiar with what is actually good for you.",
+            "That means you can stay loyal to the very pattern that keeps disappointing you, just because discomfort feels threatening.",
+            "And this next part explains why change feels so hard: your mind would rather protect you from uncertainty than help you grow.",
+            "That is why you hesitate, overthink, and repeat behavior you already know is costing you.",
+            "If that hit you, good. It means you finally saw the pattern instead of defending it.",
+            f"If you want to break it, choose one small uncomfortable action around {topic} before your brain has time to negotiate you back into the old cycle.",
+        ]
+        visuals = [
+            "person frozen mid-thought, intense expression, quiet room, cinematic close-up",
+            "person sitting across from another in a tense conversation, subtle body language, realistic social pressure",
+            "late-night isolation, person staring at phone in dark room, emotional discomfort, over-the-shoulder framing",
+            "person choosing the familiar path despite visible hesitation, grounded realistic environment, dramatic light",
+            "split-second hesitation before speaking up in a meeting, shallow depth of field, emotional tension",
+            "reflection in a mirror, tired eyes, intimate framing, visible internal conflict",
+            "moment of realization, person sitting upright with determined expression, moody but hopeful light",
+            "person taking a difficult first step forward, realistic body language, subtle breakthrough energy",
+        ]
+
+        scenes: list[FacelessScene] = []
+        for index in range(scene_count):
+            narration = beats[index]
+            scenes.append(
+                FacelessScene(
+                    scene_index=index + 1,
+                    narration=narration,
+                    image_prompt=(
+                        f"{payload.style_preset}, {tone}, vertical 9:16, {visuals[index]}, "
+                        "realistic human proportions, no text, no logos"
+                    ),
+                    duration_seconds=round(scene_duration, 2),
+                    caption_text=narration[:140],
+                )
+            )
+
+        narration = " ".join(scene.narration for scene in scenes)
+        return ScriptGenerationResponse(
+            job_id=payload.job_id,
+            project_id=payload.project_id,
+            title=title,
+            hook=hook,
+            narration=narration,
+            scenes=scenes,
+            image_prompts=[scene.image_prompt for scene in scenes],
+            caption_text=f"{hook} #{topic.replace(' ', '')[:32]}",
+        )
+
+    def _normalize_psychology_hook(self, topic: str, hook: str) -> str:
+        normalized_hook = hook.strip()
+        if not normalized_hook:
+            return f"Your brain has been lying to you about {topic}."
+
+        lowered = normalized_hook.lower()
+        strong_starts = (
+            "your brain",
+            "most people",
+            "here's a psychology fact",
+            "if you keep",
+            "if you do",
+            "psychology says",
+            "the harsh truth",
+        )
+        if lowered.startswith(strong_starts):
+            return normalized_hook
+
+        topic_phrase = topic.strip().rstrip(".")
+        return f"Your brain has been lying to you about {topic_phrase}, and that's exactly why this keeps happening."
+
+    def _normalize_psychology_title(self, topic: str, title: str) -> str:
+        normalized = title.strip()
+        if normalized:
+            return normalized
+        return f"The psychology behind {topic}".strip()
+
+    def _ensure_psychology_hook_lead(self, hook: str, narration: str) -> str:
+        cleaned_narration = narration.strip()
+        if not cleaned_narration:
+            return hook
+
+        if self._normalize_text(cleaned_narration[: max(len(hook) + 40, 160)]).startswith(
+            self._normalize_text(hook)
+        ):
+            return cleaned_narration
+
+        return f"{hook} {cleaned_narration}".strip()
+
+    def _ensure_psychology_scene_lead(
+        self,
+        hook: str,
+        scenes: list[FacelessScene],
+    ) -> list[FacelessScene]:
+        if not scenes:
+            return scenes
+
+        first_scene = scenes[0]
+        if self._normalize_text(first_scene.narration).startswith(self._normalize_text(hook)):
+            return scenes
+
+        updated_first_scene = FacelessScene(
+            scene_index=first_scene.scene_index,
+            narration=hook,
+            image_prompt=first_scene.image_prompt,
+            duration_seconds=first_scene.duration_seconds,
+            caption_text=hook,
+        )
+        return [updated_first_scene, *scenes[1:]]
+
+    def _normalize_text(self, value: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s']+", " ", value.lower())).strip()

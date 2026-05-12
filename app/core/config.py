@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     hf_token: str | None = None
     hf_inference_base_url: str = "https://api-inference.huggingface.co/models"
     hf_router_base_url: str = "https://router.huggingface.co/v1"
-    hf_timeout_seconds: float = 600.0
+    hf_timeout_seconds: float = 0.0
     allow_placeholder_generation: bool = False
 
     # LLM — HuggingFace (remote) settings
@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     ai_music_model: str = "musicgen-small"
     ai_music_cache_dir: str = "assets/generated_music"
     ai_music_duration_seconds: float = 30.0
+
+    # AI-generated scene animation (optional, Hugging Face API)
+    enable_ai_animation: bool = False
+    ai_animation_model: str = "Wan-AI/Wan2.2-I2V-A14B"
+    ai_animation_cache_dir: str = "assets/generated_animations"
+    ai_animation_num_frames: int = 81
+    ai_animation_inference_steps: int = 30
+    ai_animation_guidance_scale: float = 5.0
 
     # Whisper (STT)
     whisper_hf_model: str = "openai/whisper-large-v3-turbo"

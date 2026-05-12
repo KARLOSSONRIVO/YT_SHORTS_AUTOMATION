@@ -16,20 +16,23 @@ class HuggingFaceClient:
         *,
         token: str | None,
         inference_base_url: str,
-        timeout_seconds: float,
+        timeout_seconds: float | None,
         router_base_url: str = "https://router.huggingface.co/v1",
         max_retries: int = 2,
     ) -> None:
         self.token = token
         self.inference_base_url = inference_base_url.rstrip("/")
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
         self.router_base_url = router_base_url.rstrip("/")
         self.max_retries = max_retries
-        self.inference_client = InferenceClient(
-            provider="auto",
-            api_key=token,
-            timeout=timeout_seconds,
-        )
+        inference_client_kwargs: dict[str, Any] = {
+            "provider": "auto",
+            "api_key": token,
+        }
+        if self.timeout_seconds is not None:
+            inference_client_kwargs["timeout"] = self.timeout_seconds
+
+        self.inference_client = InferenceClient(**inference_client_kwargs)
 
     def is_configured(self) -> bool:
         return bool(self.token)
@@ -59,14 +62,22 @@ class HuggingFaceClient:
         if not self.token:
             raise IntegrationError("PY_WORKER_HF_TOKEN is required for Hugging Face image inference.")
 
-        try:
-            image = self.inference_client.text_to_image(prompt=prompt, model=model)
-        except Exception as exc:
-            if _is_payment_required(exc):
-                raise PaymentRequiredError(
-                    f"Hugging Face image model requires a paid plan (HTTP 402): {exc}"
-                ) from exc
-            raise IntegrationError(f"Hugging Face text-to-image failed: {exc}") from exc
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                image = self.inference_client.text_to_image(prompt=prompt, model=model)
+                break
+            except Exception as exc:
+                if _is_payment_required(exc):
+                    raise PaymentRequiredError(
+                        f"Hugging Face image model requires a paid plan (HTTP 402): {exc}"
+                    ) from exc
+                if not _is_transient_network_error(exc) or attempt >= self.max_retries:
+                    raise IntegrationError(f"Hugging Face text-to-image failed: {exc}") from exc
+                last_error = exc
+                time.sleep(min(2.0 * (attempt + 1), 8.0))
+        else:
+            raise IntegrationError(f"Hugging Face text-to-image failed: {last_error}")
 
         buffer = BytesIO()
         image.save(buffer, format="PNG")
@@ -112,6 +123,35 @@ class HuggingFaceClient:
             )
 
         return response.content
+
+    def image_to_video(
+        self,
+        *,
+        model: str,
+        image_path: str | Path,
+        prompt: str | None = None,
+        negative_prompt: str | None = None,
+        num_frames: int | None = None,
+        num_inference_steps: int | None = None,
+        guidance_scale: float | None = None,
+        seed: int | None = None,
+    ) -> bytes:
+        if not self.token:
+            raise IntegrationError("PY_WORKER_HF_TOKEN is required for Hugging Face image-to-video inference.")
+
+        try:
+            return self.inference_client.image_to_video(
+                Path(image_path),
+                model=model,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                seed=seed,
+            )
+        except Exception as exc:
+            raise IntegrationError(f"Hugging Face image-to-video failed: {exc}") from exc
 
     def transcribe_audio(self, *, model: str, audio_path: str) -> dict[str, Any]:
         if not self.token:
@@ -281,3 +321,19 @@ def _is_payment_required(exc: Exception) -> bool:
     if "402" in str(exc):
         return True
     return False
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    transient_signals = (
+        "operation now in progress",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "temporarily unavailable",
+        "timed out",
+        "timeout",
+        "503",
+        "429",
+    )
+    return any(signal in message for signal in transient_signals)

@@ -144,14 +144,18 @@ class StoryRenderService:
                 duration_seconds=round(total_duration, 2),
             )
 
-        if not payload.image_paths:
+        scene_video_paths = self._resolve_optional_video_paths(getattr(payload, "scene_video_paths", []))
+        if payload.render_mode == "animation_story" and not scene_video_paths and not payload.image_paths:
+            raise ValidationError("At least one scene animation or scene image is required for animation rendering.")
+        if payload.render_mode != "animation_story" and not payload.image_paths:
             raise ValidationError("At least one scene image is required for rendering.")
 
+        render_source_count = len(scene_video_paths) if payload.render_mode == "animation_story" and scene_video_paths else len(payload.image_paths)
         subtitle_durations = None
         if payload.subtitles_path:
             subtitle_durations = self._duration_plan_from_subtitles(
                 subtitles_path=Path(payload.subtitles_path),
-                scene_count=len(payload.image_paths),
+                scene_count=render_source_count,
             )
 
         if subtitle_durations:
@@ -160,6 +164,7 @@ class StoryRenderService:
             planned_durations = self._scene_duration_plan(
                 payload=payload,
                 audio_duration=audio_duration,
+                scene_count=render_source_count,
             )
 
         if audio_duration and planned_durations:
@@ -171,11 +176,18 @@ class StoryRenderService:
         concat_lines = []
         total_duration = 0.0
         use_animated_scenes = payload.render_mode in {"animation_story", "animated_scene_images"}
-        for index, (image_path, duration) in enumerate(zip(payload.image_paths, planned_durations, strict=True), start=1):
+        scene_sources = scene_video_paths if payload.render_mode == "animation_story" and scene_video_paths else payload.image_paths
+        for index, (scene_source, duration) in enumerate(zip(scene_sources, planned_durations, strict=True), start=1):
             scene_clip_path = scene_clip_dir / f"scene_{index:02d}.mp4"
-            if use_animated_scenes:
+            if payload.render_mode == "animation_story" and scene_video_paths:
+                self._render_existing_scene_video_clip(
+                    video_path=Path(scene_source),
+                    output_path=scene_clip_path,
+                    duration=duration,
+                )
+            elif use_animated_scenes:
                 self._render_animated_scene_clip(
-                    image_path=Path(image_path),
+                    image_path=Path(scene_source),
                     output_path=scene_clip_path,
                     duration=duration,
                     scene_index=index,
@@ -184,7 +196,7 @@ class StoryRenderService:
                 )
             else:
                 self._render_scene_clip(
-                    image_path=Path(image_path),
+                    image_path=Path(scene_source),
                     output_path=scene_clip_path,
                     duration=duration,
                 )
@@ -461,15 +473,60 @@ class StoryRenderService:
             ]
         )
 
+    def _render_existing_scene_video_clip(self, *, video_path: Path, output_path: Path, duration: float) -> None:
+        if duration <= 0:
+            raise ValidationError("Scene duration must be greater than zero.")
+
+        fade_in = min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
+        fade_out = min(self.SCENE_FADE_OUT_SECONDS, max(duration * 0.22, 0.08))
+        fade_out_start = max(duration - fade_out, 0.0)
+        video_filter = (
+            "setpts=PTS-STARTPTS,"
+            "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,"
+            "crop=1080:1920,"
+            f"trim=duration={duration},"
+            "setpts=PTS-STARTPTS,"
+            f"fade=t=in:st=0:d={fade_in},"
+            f"fade=t=out:st={fade_out_start}:d={fade_out},"
+            "format=yuv420p"
+        )
+
+        self.ffmpeg_client.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(video_path),
+                "-vf",
+                video_filter,
+                "-t",
+                str(duration),
+                "-an",
+                "-r",
+                str(self.SCENE_FPS),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                str(output_path),
+            ]
+        )
+
     def _scene_duration_plan(
         self,
         *,
         payload: StoryRenderRequest,
         audio_duration: float | None,
+        scene_count: int | None = None,
     ) -> list[float]:
+        source_count = scene_count if scene_count is not None else len(payload.image_paths)
         scene_total_duration = sum(
             max(scene.duration_seconds if scene else 5.0, 1.0)
-            for scene in payload.scenes[: len(payload.image_paths)]
+            for scene in payload.scenes[:source_count]
         )
         duration_scale = (
             audio_duration / scene_total_duration
@@ -477,7 +534,7 @@ class StoryRenderService:
             else 1.0
         )
         planned_durations: list[float] = []
-        for index, _image_path in enumerate(payload.image_paths):
+        for index in range(source_count):
             scene = payload.scenes[index] if index < len(payload.scenes) else None
             duration = max((scene.duration_seconds if scene else 5.0) * duration_scale, 1.0)
             planned_durations.append(duration)
@@ -1132,6 +1189,14 @@ class StoryRenderService:
         return "Trending story"
 
     def _resolve_optional_audio_paths(self, paths: list[str] | None) -> list[Path]:
+        resolved_paths: list[Path] = []
+        for raw_path in paths or []:
+            path = Path(raw_path)
+            if path.exists():
+                resolved_paths.append(path.resolve())
+        return resolved_paths
+
+    def _resolve_optional_video_paths(self, paths: list[str] | None) -> list[Path]:
         resolved_paths: list[Path] = []
         for raw_path in paths or []:
             path = Path(raw_path)
