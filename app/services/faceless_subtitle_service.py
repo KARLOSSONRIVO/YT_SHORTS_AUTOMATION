@@ -42,6 +42,10 @@ class FacelessSubtitleService:
     WORD_HIGHLIGHT_LAG_SECONDS = 0.18
     WORD_HIGHLIGHT_MAX_LAG_RATIO = 0.25
     TITLE_INTRO_HOLD_SECONDS = 0.35
+    OPENING_TEXT_DELAY_SECONDS = 0.16
+    OPENING_TEXT_FADE_IN_MS = 180
+    OPENING_TEXT_FADE_OUT_MS = 110
+    OPENING_TEXT_MOVE_DISTANCE_PX = 42
 
     def __init__(
         self,
@@ -296,39 +300,22 @@ class FacelessSubtitleService:
         cues: list[TimedCue],
         payload: StorySubtitleGenerationRequest,
     ) -> list[TimedCue]:
-        if not cues or not payload.scenes:
+        if not cues:
             return cues
 
-        first_scene = payload.scenes[0]
         opening_text = (payload.opening_display_text or payload.project_title or "").strip()
         if not opening_text:
             return cues
 
-        scene_opening_text = (first_scene.caption_text or first_scene.narration or "").strip()
-        if not scene_opening_text:
-            return cues
+        opening_audio_end = self._opening_audio_end(cues=cues, opening_text=opening_text)
+        if opening_audio_end is None:
+            first_cue_end = cues[0].end if cues else self._estimate_opening_duration(opening_text)
+            opening_audio_end = min(first_cue_end, self._estimate_opening_duration(opening_text))
 
-        normalized_opening_text = self._normalize_text(opening_text)
-        normalized_scene_opening_text = self._normalize_text(scene_opening_text)
-        if (
-            normalized_opening_text != normalized_scene_opening_text
-            and not normalized_scene_opening_text.startswith(normalized_opening_text)
-            and not normalized_opening_text.startswith(normalized_scene_opening_text)
-        ):
-            return cues
-
-        opening_visible_until = max(float(first_scene.duration_seconds), 0.1)
-        opening_cues = [cue for cue in cues if cue.start < opening_visible_until]
-        if not opening_cues:
-            return cues
-
-        actual_opening_end = round(
-            max(max(cue.end for cue in opening_cues), opening_visible_until) + self.TITLE_INTRO_HOLD_SECONDS,
-            2,
-        )
+        actual_opening_end = round(opening_audio_end + self.TITLE_INTRO_HOLD_SECONDS, 2)
         collapsed_opening_cue = TimedCue(
             index=1,
-            start=0.0,
+            start=round(self.OPENING_TEXT_DELAY_SECONDS, 2),
             end=actual_opening_end,
             text=opening_text,
             words=[],
@@ -374,6 +361,53 @@ class FacelessSubtitleService:
                 )
             )
         return normalized_cues
+
+    def _opening_audio_end(self, *, cues: list[TimedCue], opening_text: str) -> float | None:
+        opening_tokens = self._normalize_text(opening_text).split()
+        if not opening_tokens:
+            return None
+
+        matched_index = 0
+        last_match_end: float | None = None
+        minimum_partial_match = max(round(len(opening_tokens) * 0.7), 1)
+
+        for cue in cues:
+            if cue.start > 8.0:
+                break
+
+            if not cue.words:
+                normalized_cue = self._normalize_text(cue.text)
+                normalized_opening = " ".join(opening_tokens)
+                if (
+                    normalized_cue == normalized_opening
+                    or normalized_cue.startswith(normalized_opening)
+                    or normalized_opening.startswith(normalized_cue)
+                ):
+                    return cue.end
+                continue
+
+            for word in cue.words:
+                for token in self._normalize_text(word.text).split():
+                    if matched_index < len(opening_tokens) and token == opening_tokens[matched_index]:
+                        matched_index += 1
+                        last_match_end = word.end
+                        if matched_index == len(opening_tokens):
+                            return last_match_end
+                        continue
+
+                    if matched_index >= minimum_partial_match:
+                        return last_match_end
+
+                    if matched_index > 0:
+                        return None
+
+        if matched_index >= minimum_partial_match:
+            return last_match_end
+        return None
+
+    def _estimate_opening_duration(self, opening_text: str) -> float:
+        word_count = max(len(self._normalize_text(opening_text).split()), 1)
+        return min(max(word_count / 2.35, 0.9), 3.5)
 
     def _audio_duration(self, audio_path: Path) -> float | None:
         try:
@@ -435,7 +469,7 @@ class FacelessSubtitleService:
 
     def _cue_to_ass_events(self, cue: TimedCue, payload: StorySubtitleGenerationRequest) -> list[str]:
         if cue.whole_line:
-            return [self._full_line_event(cue.text, cue.start, cue.end)]
+            return [self._full_line_event(cue.text, cue.start, cue.end, payload)]
 
         if cue.words:
             return self._word_timed_events(cue, payload)
@@ -519,8 +553,10 @@ class FacelessSubtitleService:
     ) -> str:
         escaped = self._escape_ass_text(token.upper())
         ass_color = self._hex_to_ass_color(payload.highlight_color or self.ACTIVE_WORD_COLOR)
+        position_tag = self._ass_position_override(payload.position)
         style_tag = (
             "{"
+            f"{position_tag}"
             f"\\1c{ass_color}"
             f"\\c{ass_color}"
             "\\b1"
@@ -537,13 +573,20 @@ class FacelessSubtitleService:
             f"Default,,0,0,0,,{style_tag}{escaped}{{\\rDefault}}"
         )
 
-    def _full_line_event(self, text: str, start: float, end: float) -> str:
+    def _full_line_event(
+        self,
+        text: str,
+        start: float,
+        end: float,
+        payload: StorySubtitleGenerationRequest,
+    ) -> str:
         escaped = self._escape_ass_text(self._clean_display_text(text))
+        position_tag = self._ass_position_override(payload.position, animated=True)
         return (
             "Dialogue: 0,"
             f"{self._format_ass_timestamp(start)},"
             f"{self._format_ass_timestamp(end)},"
-            f"Default,,0,0,0,,{escaped}"
+            f"Default,,0,0,0,,{{{position_tag}\\fad({self.OPENING_TEXT_FADE_IN_MS},{self.OPENING_TEXT_FADE_OUT_MS})}}{escaped}"
         )
 
     def _ass_alignment(self, position: str | None) -> int:
@@ -559,6 +602,27 @@ class FacelessSubtitleService:
         if position == "middle_center":
             return 120
         return 220
+
+    def _ass_position_override(self, position: str | None, animated: bool = False) -> str:
+        x = self.TARGET_CENTER_X()
+        y = self.TARGET_POSITION_Y(position)
+        alignment = self._ass_alignment(position)
+        if animated:
+            return (
+                f"\\an{alignment}"
+                f"\\move({x},{y + self.OPENING_TEXT_MOVE_DISTANCE_PX},{x},{y},0,{self.OPENING_TEXT_FADE_IN_MS})"
+            )
+        return f"\\an{alignment}\\pos({x},{y})"
+
+    def TARGET_CENTER_X(self) -> int:
+        return 540
+
+    def TARGET_POSITION_Y(self, position: str | None) -> int:
+        if position == "top_center":
+            return 320
+        if position == "middle_center":
+            return 960
+        return 1560
 
     def _escape_ass_text(self, text: str) -> str:
         escaped = text.replace("\\", r"\\")

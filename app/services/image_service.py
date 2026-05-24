@@ -3,6 +3,8 @@ from pathlib import Path
 import logging
 import re
 
+from PIL import Image
+
 from app.core.exceptions import IntegrationError, PaymentRequiredError
 from app.integrations.huggingface_client import HuggingFaceClient
 from app.schemas.faceless_video import (
@@ -17,6 +19,18 @@ logger = logging.getLogger(__name__)
 
 class ImageService:
     COLORS = ["0x22333B", "0x5E503F", "0x2D3142", "0x3A5A40", "0x6D597A", "0x355070"]
+    TARGET_WIDTH = 1080
+    TARGET_HEIGHT = 1920
+    IMAGE_GENERATION_ATTEMPTS = 4
+    IMAGE_NEGATIVE_PROMPT = (
+        "text, words, letters, typography, captions, subtitles, closed captions, "
+        "watermark, logo, ui overlay, lower third, ticker, poster text, quote text, "
+        "headline, credits, score bug, scoreboard, labels, signs, banners, "
+        "jersey text, jersey numbers, shirt text, uniform lettering, brand marks, "
+        "newspaper text, book text, document text, handwriting, calligraphy, "
+        "footer text, top text, bottom text, embedded subtitles, burned in subtitles, "
+        "subtitle strip, caption strip, meme text, random glyphs, symbols"
+    )
 
     def __init__(
         self,
@@ -58,7 +72,7 @@ class ImageService:
                 scene_prompt=scene.image_prompt,
             )
             try:
-                output_path.write_bytes(self._generate_image(prompt))
+                output_path.write_bytes(self._generate_clean_scene_image(prompt))
             except Exception as exc:
                 if not self.allow_placeholder_generation:
                     if isinstance(exc, IntegrationError):
@@ -88,8 +102,17 @@ class ImageService:
             "photorealistic, anatomically correct body proportions, realistic hands and feet, "
             "natural facial features, believable motion freeze, clean composition, high detail"
         )
+        anti_text_directive = (
+            "absolutely no visible text anywhere in the image, no readable or unreadable letters, "
+            "no subtitle bars, no lower thirds, no captions, no signage, no posters, no screens with text, "
+            "no jersey names, no jersey numbers, no uniform lettering, no logos, no watermarks, "
+            "no newspaper clippings, no documents, no screens, no scorebugs, no scoreboard overlays, "
+            "no quote cards, no meme text, no closed-caption strip, no footer strip"
+        )
         negative_constraints = (
-            "no text, no logos, no watermarks, no subtitles, no scoreboard overlay, no UI, "
+            "no text, no words, no letters, no typography, no captions, no logos, no watermarks, "
+            "no subtitles, no burned-in subtitles, no bottom caption strip, no top title strip, "
+            "no scoreboard overlay, no UI, "
             "no duplicated subjects, no extra limbs, no distorted anatomy, no floating objects"
         )
         domain_boost = self._domain_specific_boost(normalized_prompt)
@@ -100,28 +123,67 @@ class ImageService:
             domain_boost,
             realism_boost,
             "vertical 9:16 frame",
+            anti_text_directive,
             negative_constraints,
         ]
         return ", ".join(part for part in parts if part)
+
+    def _generate_clean_scene_image(self, prompt: str) -> bytes:
+        last_candidate: bytes | None = None
+
+        for attempt in range(self.IMAGE_GENERATION_ATTEMPTS):
+            attempt_prompt = prompt
+            if attempt > 0:
+                attempt_prompt = (
+                    f"{prompt}, clean cinematic still frame only, absolutely no text artifacts, "
+                    "no letters, no captions, no subtitle strip, no footer text, no overlay graphics"
+                )
+
+            candidate = self._post_process_generated_image(self._generate_image(attempt_prompt))
+            last_candidate = candidate
+
+            if not self._processed_image_still_has_text_like_artifact(candidate):
+                return candidate
+
+            logger.warning(
+                "Generated scene still appears to contain text-like artifacts; retrying image generation "
+                "(attempt %s/%s).",
+                attempt + 1,
+                self.IMAGE_GENERATION_ATTEMPTS,
+            )
+
+        if last_candidate is None:
+            raise IntegrationError("Image generation failed before producing an image candidate.")
+
+        aggressively_cleaned = self._aggressively_crop_text_bands(last_candidate)
+        if not self._processed_image_still_has_text_like_artifact(aggressively_cleaned):
+            return aggressively_cleaned
+
+        logger.warning(
+            "Generated scene still appears to contain text-like artifacts after retries; "
+            "applying final safe framing cleanup instead of failing the stage."
+        )
+        return self._force_safe_text_free_framing(last_candidate)
 
     def _domain_specific_boost(self, prompt: str) -> str:
         lowered = prompt.lower()
         sports_terms = {
             "soccer": (
                 "realistic association football scene, regulation soccer ball, believable stadium perspective, "
-                "athlete in a plausible kicking or sprinting pose, correct goal or pitch context"
+                "athlete in a plausible kicking or sprinting pose, correct goal or pitch context, "
+                "plain uniforms with no readable names or numbers"
             ),
             "football": (
                 "realistic American football scene, regulation field markings, believable tackle or run pose, "
-                "correct protective gear, stadium action photo feel"
+                "correct protective gear, stadium action photo feel, plain uniforms with no readable names or numbers"
             ),
             "basketball": (
                 "realistic basketball scene, correct court markings, believable dribble, layup, dunk, or defensive stance, "
-                "arena sports photography look"
+                "arena sports photography look, plain uniforms with no readable names or numbers"
             ),
             "baseball": (
                 "realistic baseball scene, accurate bat or glove use, believable pitching or batting pose, "
-                "regulation field context"
+                "regulation field context, plain uniforms with no readable names or numbers"
             ),
             "boxing": (
                 "realistic boxing scene, accurate gloves, ring ropes, believable punch or guard stance, "
@@ -154,6 +216,7 @@ class ImageService:
                 return self.huggingface_client.text_to_image(
                     model=self.model,
                     prompt=prompt,
+                    negative_prompt=self.IMAGE_NEGATIVE_PROMPT,
                 )
             except PaymentRequiredError:
                 logger.warning(
@@ -173,6 +236,219 @@ class ImageService:
             "Image generation unavailable: HuggingFace requires payment (402) "
             "and no local SDXL model is configured (PY_WORKER_IMAGE_MODEL_PATH)."
         )
+
+    def _post_process_generated_image(self, image_bytes: bytes) -> bytes:
+        with Image.open(BytesIO(image_bytes)) as source_image:
+            image = source_image.convert("RGB")
+            image = self._trim_banner_bands(image)
+            image = self._trim_subtitle_like_footer(image)
+            image = self._cover_resize(image, target_width=self.TARGET_WIDTH, target_height=self.TARGET_HEIGHT)
+
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def _processed_image_still_has_text_like_artifact(self, image_bytes: bytes) -> bool:
+        with Image.open(BytesIO(image_bytes)) as source_image:
+            image = source_image.convert("RGB")
+            return self._edge_has_text_band(image, from_bottom=True) or self._edge_has_text_band(
+                image, from_bottom=False
+            )
+
+    def _edge_has_text_band(self, image: Image.Image, *, from_bottom: bool) -> bool:
+        width, height = image.size
+        if width <= 0 or height <= 0:
+            return False
+
+        pixels = image.load()
+        max_scan_rows = max(int(height * 0.22), 60)
+        suspicious_rows = 0
+        minimum_suspicious_rows = max(int(height * 0.014), 10)
+
+        if from_bottom:
+            row_iterable = range(height - 1, max(height - max_scan_rows - 1, -1), -1)
+        else:
+            row_iterable = range(0, min(max_scan_rows, height))
+
+        for y in row_iterable:
+            bright_pixels = 0
+            dark_pixels = 0
+            sampled_pixels = 0
+            for x in range(0, width, max(width // 180, 1)):
+                red, green, blue = pixels[x, y]
+                sampled_pixels += 1
+                if red >= 190 and green >= 190 and blue >= 190:
+                    bright_pixels += 1
+                if red <= 75 and green <= 75 and blue <= 75:
+                    dark_pixels += 1
+
+            if sampled_pixels == 0:
+                continue
+
+            bright_ratio = bright_pixels / sampled_pixels
+            dark_ratio = dark_pixels / sampled_pixels
+            looks_like_text_band = dark_ratio >= 0.28 and bright_ratio >= 0.045
+            looks_like_bright_footer = bright_ratio >= 0.52
+
+            if looks_like_text_band or looks_like_bright_footer:
+                suspicious_rows += 1
+
+        return suspicious_rows >= minimum_suspicious_rows
+
+    def _aggressively_crop_text_bands(self, image_bytes: bytes) -> bytes:
+        with Image.open(BytesIO(image_bytes)) as source_image:
+            image = source_image.convert("RGB")
+            width, height = image.size
+            top_crop = int(height * 0.05) if self._edge_has_text_band(image, from_bottom=False) else 0
+            bottom_crop = int(height * 0.12) if self._edge_has_text_band(image, from_bottom=True) else 0
+            cropped_bottom = max(height - bottom_crop, top_crop + 100)
+            image = image.crop((0, top_crop, width, cropped_bottom))
+            image = self._cover_resize(image, target_width=self.TARGET_WIDTH, target_height=self.TARGET_HEIGHT)
+
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def _force_safe_text_free_framing(self, image_bytes: bytes) -> bytes:
+        with Image.open(BytesIO(image_bytes)) as source_image:
+            image = source_image.convert("RGB")
+            width, height = image.size
+
+            top_crop = int(height * 0.07)
+            bottom_crop = int(height * 0.18)
+            side_crop = int(width * 0.02)
+
+            left = min(side_crop, max(width // 10, 1))
+            top = min(top_crop, max(height // 5, 1))
+            right = max(width - side_crop, left + 100)
+            bottom = max(height - bottom_crop, top + 100)
+
+            image = image.crop((left, top, right, bottom))
+            image = self._cover_resize(
+                image,
+                target_width=self.TARGET_WIDTH,
+                target_height=self.TARGET_HEIGHT,
+            )
+
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def _trim_banner_bands(self, image: Image.Image) -> Image.Image:
+        image = self._trim_edge_banner(image, from_bottom=True)
+        image = self._trim_edge_banner(image, from_bottom=False)
+        return image
+
+    def _trim_subtitle_like_footer(self, image: Image.Image) -> Image.Image:
+        width, height = image.size
+        if width <= 0 or height <= 0:
+            return image
+
+        pixels = image.load()
+        scan_start = int(height * 0.78)
+        suspicious_rows = 0
+        first_suspicious_row: int | None = None
+
+        for y in range(scan_start, height):
+            bright_pixels = 0
+            dark_pixels = 0
+            sampled_pixels = 0
+            for x in range(0, width, max(width // 180, 1)):
+                red, green, blue = pixels[x, y]
+                sampled_pixels += 1
+                if red >= 180 and green >= 180 and blue >= 180:
+                    bright_pixels += 1
+                if red <= 70 and green <= 70 and blue <= 70:
+                    dark_pixels += 1
+
+            if sampled_pixels == 0:
+                continue
+
+            bright_ratio = bright_pixels / sampled_pixels
+            dark_ratio = dark_pixels / sampled_pixels
+
+            if dark_ratio >= 0.45 and bright_ratio >= 0.08:
+                suspicious_rows += 1
+                if first_suspicious_row is None:
+                    first_suspicious_row = y
+
+        minimum_suspicious_rows = max(int(height * 0.025), 18)
+        if first_suspicious_row is None or suspicious_rows < minimum_suspicious_rows:
+            return image
+
+        cropped_height = max(first_suspicious_row - 8, int(height * 0.72))
+        return image.crop((0, 0, width, cropped_height))
+
+    def _trim_edge_banner(self, image: Image.Image, *, from_bottom: bool) -> Image.Image:
+        width, height = image.size
+        if width <= 0 or height <= 0:
+            return image
+
+        pixels = image.load()
+        band_start: int | None = None
+        contiguous_rows = 0
+        minimum_band_rows = max(int(height * 0.04), 24)
+        max_band_rows = int(height * 0.3)
+
+        if from_bottom:
+            row_iterable = range(height - 1, max(height - max_band_rows - 1, -1), -1)
+        else:
+            row_iterable = range(0, min(max_band_rows, height))
+
+        for y in row_iterable:
+            bright_pixels = 0
+            dark_pixels = 0
+            sampled_pixels = 0
+            for x in range(0, width, max(width // 160, 1)):
+                red, green, blue = pixels[x, y]
+                sampled_pixels += 1
+                if red >= 235 and green >= 235 and blue >= 235:
+                    bright_pixels += 1
+                if red <= 45 and green <= 45 and blue <= 45:
+                    dark_pixels += 1
+
+            if sampled_pixels == 0:
+                continue
+
+            bright_ratio = bright_pixels / sampled_pixels
+            dark_ratio = dark_pixels / sampled_pixels
+            looks_like_bright_banner = bright_ratio >= 0.72
+            looks_like_dark_banner_with_text = dark_ratio >= 0.72 and bright_ratio >= 0.01
+
+            if looks_like_bright_banner or looks_like_dark_banner_with_text:
+                band_start = y
+                contiguous_rows += 1
+                continue
+
+            if contiguous_rows >= minimum_band_rows:
+                break
+
+            band_start = None
+            contiguous_rows = 0
+
+        if band_start is None or contiguous_rows < minimum_band_rows:
+            return image
+
+        if from_bottom:
+            cropped_height = max(band_start, int(height * 0.6))
+            return image.crop((0, 0, width, cropped_height))
+
+        cropped_top = min(band_start + contiguous_rows, int(height * 0.18))
+        return image.crop((0, cropped_top, width, height))
+
+    def _cover_resize(self, image: Image.Image, *, target_width: int, target_height: int) -> Image.Image:
+        source_width, source_height = image.size
+        if source_width <= 0 or source_height <= 0:
+            return image
+
+        scale = max(target_width / source_width, target_height / source_height)
+        resized_width = max(int(round(source_width * scale)), target_width)
+        resized_height = max(int(round(source_height * scale)), target_height)
+        resized = image.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
+
+        left = max((resized_width - target_width) // 2, 0)
+        top = max((resized_height - target_height) // 2, 0)
+        return resized.crop((left, top, left + target_width, top + target_height))
 
     # ------------------------------------------------------------------ #
     # Local SDXL                                                           #
@@ -210,6 +486,7 @@ class ImageService:
 
         image = self._sdxl_pipeline(
             prompt=prompt,
+            negative_prompt=self.IMAGE_NEGATIVE_PROMPT,
             height=1920,
             width=1080,
             num_inference_steps=30,

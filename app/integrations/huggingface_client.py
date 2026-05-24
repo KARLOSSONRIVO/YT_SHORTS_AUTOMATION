@@ -58,14 +58,20 @@ class HuggingFaceClient:
         response = self._post_router_json("/chat/completions", payload)
         return self._extract_generated_text(response)
 
-    def text_to_image(self, *, model: str, prompt: str) -> bytes:
+    def text_to_image(self, *, model: str, prompt: str, negative_prompt: str | None = None) -> bytes:
         if not self.token:
             raise IntegrationError("PY_WORKER_HF_TOKEN is required for Hugging Face image inference.")
 
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                image = self.inference_client.text_to_image(prompt=prompt, model=model)
+                kwargs: dict[str, Any] = {
+                    "prompt": prompt,
+                    "model": model,
+                }
+                if negative_prompt:
+                    kwargs["negative_prompt"] = negative_prompt
+                image = self.inference_client.text_to_image(**kwargs)
                 break
             except Exception as exc:
                 if _is_payment_required(exc):

@@ -14,6 +14,8 @@ class LLMService:
     SCRIPT_MAX_ATTEMPTS = 3
     MIN_DURATION_RATIO = 0.72
     ESTIMATED_WORDS_PER_SECOND = 2.15
+    MAX_PSYCHOLOGY_HOOK_WORDS = 8
+    MAX_HISTORY_HOOK_WORDS = 9
 
     def __init__(
         self,
@@ -78,14 +80,14 @@ class LLMService:
                 "- Add meaningful detail to every scene instead of shortening transitions.\n"
             )
 
-        if payload.script_framework == "psychology_truth":
-            return self._build_psychology_truth_prompt(
+        if payload.script_framework == "history_story":
+            return self._build_history_story_prompt(
                 payload,
                 target_word_count=target_word_count,
                 retry_instruction=retry_instruction,
             )
 
-        return self._build_standard_story_prompt(
+        return self._build_psychology_truth_prompt(
             payload,
             target_word_count=target_word_count,
             retry_instruction=retry_instruction,
@@ -159,7 +161,7 @@ Return only valid JSON. Do not wrap it in markdown.
 Required JSON shape:
 {{
   "title": "short curiosity title for the project metadata",
-  "hook": "first sentence that grabs attention immediately",
+  "hook": "short punchy opening hook, 4 to 8 words maximum",
   "narration": "full narration script",
   "caption_text": "short social caption",
   "scenes": [
@@ -182,7 +184,7 @@ Visual style preset: {payload.style_preset}
 Audience: {payload.audience or "viewers who respond to blunt psychology truths"}
 
 Beat formula to follow:
-1. Opening hook: a harsh truth, ego hit, pain-point, or uncomfortable question.
+1. Opening hook: use a short punchy line that creates curiosity without explaining the whole topic.
 2. Set up the conflict: explain the psychological pattern and why it matters personally.
 3. Mid-video hook #1: pattern interrupt or sharper reframing.
 4. Truth bomb: one uncomfortable but believable psychology fact.
@@ -194,6 +196,9 @@ Beat formula to follow:
 
 Rules:
 - Start directly with the spoken hook. Do NOT speak the title in the narration.
+- Keep the hook simple and direct. Do not summarize the full topic in the hook.
+- Do not repeat the title, project name, or full topic inside the hook.
+- Good hook examples: "Your brain is lying again.", "This is why it hurts.", "Most people miss this.", "This pattern controls you."
 - Create 6 to 8 scenes.
 - Each scene should map naturally to one of the beats above.
 - Make the script sound like a smooth spoken short, not labeled sections.
@@ -209,6 +214,79 @@ Rules:
   - camera framing or angle
   - lighting / mood
 - For psychology scenes, prefer realistic human behavior, body language, tension, reflection, confrontation, isolation, social pressure, rejection, or breakthrough moments.
+- The image prompt must explicitly avoid any text-bearing elements in the frame: no signs, no captions, no subtitles, no posters, no screens with text, no scoreboard text, no jersey names, no jersey numbers, no uniform lettering, no labels, no banners.
+- Avoid extra limbs, broken anatomy, floating objects, duplicated people, visible text, logos, watermarks, scoreboards, UI overlays, or subtitles.
+- The total scene durations should be close to the target duration.
+- Return JSON only.
+{retry_instruction}
+""".strip()
+
+    def _build_history_story_prompt(
+        self,
+        payload: ScriptGenerationRequest,
+        *,
+        target_word_count: int,
+        retry_instruction: str,
+    ) -> str:
+        return f"""
+You generate retention-first faceless history shorts for YouTube Shorts and TikTok.
+Return only valid JSON. Do not wrap it in markdown.
+
+Required JSON shape:
+{{
+  "title": "short curiosity title for the project metadata",
+  "hook": "short punchy opening hook, 4 to 9 words maximum",
+  "narration": "full narration script",
+  "caption_text": "short social caption",
+  "scenes": [
+    {{
+      "scene_index": 1,
+      "narration": "scene narration",
+      "image_prompt": "vertical 9:16 cinematic visual prompt, no text, no logos",
+      "duration_seconds": 6,
+      "caption_text": "short subtitle text"
+    }}
+  ]
+}}
+
+Topic: {payload.topic}
+Tone: {payload.tone}
+Language: {payload.language}
+Target duration seconds: {payload.target_duration_seconds}
+Approximate target spoken word count: {target_word_count}
+Visual style preset: {payload.style_preset}
+Audience: {payload.audience or "viewers who enjoy dramatic history stories"}
+
+Beat formula to follow:
+1. Opening hook: a short line that sparks immediate curiosity.
+2. Historical setup: who, where, and what moment we are entering.
+3. Rising tension: what was going wrong or what danger was building.
+4. Turning point: the decision, mistake, betrayal, battle, or event that changed everything.
+5. Consequence: what happened right after and why it shocked people.
+6. Legacy: why the story still matters, what it changed, or why history remembers it.
+7. Closing sting: one final line that leaves the viewer with the weight of the event.
+
+Rules:
+- Start directly with the spoken hook. Do NOT speak the title in the narration.
+- Keep the hook simple and direct. Do not summarize the full topic in the hook.
+- Do not repeat the title, project name, or full topic inside the hook.
+- Good hook examples: "History almost forgot this.", "One mistake changed everything.", "This should never have happened.", "An empire cracked here."
+- Create 6 to 8 scenes.
+- Each scene should map naturally to one of the beats above.
+- Make the script sound like a smooth spoken short, not labeled sections.
+- The hook must land in the very first sentence.
+- Make the history vivid, concrete, and easy to follow without sounding like a textbook.
+- Focus on real people, pressure, consequences, and stakes.
+- The closing line should make the event feel meaningful or haunting.
+- Make the full narration long enough to fill roughly {payload.target_duration_seconds} seconds of voice-over.
+- Every image prompt must describe one specific frozen visual moment with:
+  - the main subject
+  - the exact action happening
+  - the setting/background
+  - camera framing or angle
+  - lighting / mood
+- For history scenes, prefer believable period details, clothing, architecture, tools, battlefields, courts, ships, crowds, maps, smoke, torchlight, ruins, and human expressions.
+- The image prompt must explicitly avoid any text-bearing elements in the frame: no signs, no captions, no subtitles, no posters, no screens with text, no scoreboard text, no jersey names, no jersey numbers, no uniform lettering, no labels, no banners.
 - Avoid extra limbs, broken anatomy, floating objects, duplicated people, visible text, logos, watermarks, scoreboards, UI overlays, or subtitles.
 - The total scene durations should be close to the target duration.
 - Return JSON only.
@@ -242,7 +320,12 @@ Rules:
         hook = str(data.get("hook") or scenes[0].narration).strip()
         caption_text = str(data.get("caption_text") or hook).strip()
 
-        if payload.script_framework == "psychology_truth":
+        if payload.script_framework == "history_story":
+            hook = self._normalize_history_hook(payload.topic, hook)
+            title = self._normalize_history_title(payload.topic, title)
+            narration = self._ensure_psychology_hook_lead(hook, narration)
+            scenes = self._ensure_psychology_scene_lead(hook, scenes)
+        else:
             hook = self._normalize_psychology_hook(payload.topic, hook)
             title = self._normalize_psychology_title(payload.topic, title)
             narration = self._ensure_psychology_hook_lead(hook, narration)
@@ -300,49 +383,56 @@ Rules:
         return data
 
     def _generate_placeholder_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
-        if payload.script_framework == "psychology_truth":
-            return self._generate_placeholder_psychology_script(payload)
+        if payload.script_framework == "history_story":
+            return self._generate_placeholder_history_script(payload)
+        return self._generate_placeholder_psychology_script(payload)
 
+    def _generate_placeholder_history_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
         topic = payload.topic.strip()
-        audience = f" for {payload.audience.strip()}" if payload.audience else ""
-        scene_count = min(max(round(payload.target_duration_seconds / 7), 3), 8)
+        tone = (payload.tone or "dramatic, vivid, cinematic").strip()
+        scene_count = min(max(round(payload.target_duration_seconds / 7), 6), 8)
         scene_duration = max(payload.target_duration_seconds / scene_count, 3)
 
-        title = f"The hidden story of {topic.title()}"
-        hook = f"What if everything you knew about {topic} was only the surface?"
-        scenes: list[FacelessScene] = []
-
+        title = topic or "The history they almost forgot"
+        hook = self._fallback_history_hook(topic)
         beats = [
-            "Open with the mystery and a detail that feels impossible to ignore.",
-            "Reveal the ordinary world before the first strange turn.",
-            "Introduce the pressure, the cost, and the choice nobody wanted.",
-            "Escalate with a surprising consequence that changes the stakes.",
-            "Slow down for the emotional truth behind the story.",
-            "Deliver the twist, insight, or lesson that makes the viewer stay.",
-            "Close with a memorable image and a question worth sharing.",
-            "Leave the audience with a clean final thought.",
+            hook,
+            f"It started with {topic}, in a moment people thought they understood, but the real danger was only beginning.",
+            "The pressure built quietly, and the people inside the story had less time, less control, and fewer good choices than anyone realized.",
+            "Then came the turning point, the one decision that changed the course of everything that followed.",
+            "What happened next stunned everyone watching, because the cost was bigger and faster than anyone expected.",
+            "The fallout did not end in that moment. It kept spreading through the people, the place, and the future it touched.",
+            "That is why history kept this story alive, not because it was ordinary, but because it exposed how fragile power and certainty really are.",
+            "And once you see how it happened, it becomes impossible to pretend it could never happen again.",
+        ]
+        visuals = [
+            "single central figure in a tense historical moment, cinematic close-up, dramatic light",
+            "wide period environment establishing where the event unfolds, believable architecture and clothing",
+            "crowd tension, worried faces, rising pressure, grounded historical atmosphere",
+            "the decisive action or mistake frozen at the critical instant, dynamic framing",
+            "immediate aftermath, shock, smoke, chaos, or stunned silence, emotional realism",
+            "aftermath spreading through a city, battlefield, court, harbor, or public square",
+            "symbolic but physically believable reminder of the legacy, ruins, memorial, map, or surviving witness",
+            "quiet closing image that leaves emotional weight, lone figure, fading torchlight, or haunted landscape",
         ]
 
+        scenes: list[FacelessScene] = []
         for index in range(scene_count):
-            beat = beats[index % len(beats)]
-            narration = (
-                f"{beat} This moment in {topic} matters because it turns a simple idea "
-                f"into something people remember{audience}."
-            )
+            narration = beats[index]
             scenes.append(
                 FacelessScene(
                     scene_index=index + 1,
                     narration=narration,
                     image_prompt=(
-                        f"{payload.style_preset}, vertical 9:16 scene about {topic}, "
-                        f"{beat.lower()}, moody lighting, no text, no logos"
+                        f"{payload.style_preset}, {tone}, vertical 9:16, {visuals[index]}, "
+                        "historically grounded, realistic human proportions, no text, no logos"
                     ),
                     duration_seconds=round(scene_duration, 2),
                     caption_text=narration[:140],
                 )
             )
 
-        narration = " ".join([hook, *[scene.narration for scene in scenes]])
+        narration = " ".join(scene.narration for scene in scenes)
         return ScriptGenerationResponse(
             job_id=payload.job_id,
             project_id=payload.project_id,
@@ -412,25 +502,98 @@ Rules:
         )
 
     def _normalize_psychology_hook(self, topic: str, hook: str) -> str:
-        normalized_hook = hook.strip()
-        if not normalized_hook:
-            return f"Your brain has been lying to you about {topic}."
+        normalized_hook = re.sub(r"\s+", " ", hook).strip()
+        if normalized_hook:
+            first_sentence = re.split(r"(?<=[.!?])\s+", normalized_hook)[0].strip()
+            shortened = self._shorten_psychology_hook(first_sentence)
+            if shortened:
+                return shortened
 
-        lowered = normalized_hook.lower()
-        strong_starts = (
-            "your brain",
-            "most people",
-            "here's a psychology fact",
-            "if you keep",
-            "if you do",
-            "psychology says",
-            "the harsh truth",
-        )
-        if lowered.startswith(strong_starts):
-            return normalized_hook
+        return self._fallback_psychology_hook(topic)
 
-        topic_phrase = topic.strip().rstrip(".")
-        return f"Your brain has been lying to you about {topic_phrase}, and that's exactly why this keeps happening."
+    def _shorten_psychology_hook(self, hook: str) -> str:
+        cleaned = re.sub(r"\s+", " ", hook).strip()
+        if not cleaned:
+            return ""
+
+        words = cleaned.split()
+        if len(words) <= self.MAX_PSYCHOLOGY_HOOK_WORDS:
+            return cleaned
+
+        lowered = cleaned.lower()
+        if "ignore" in lowered or "lose interest" in lowered or "pull away" in lowered:
+            return "This is why it hurts."
+        if "confidence" in lowered:
+            return "Your confidence is being hijacked."
+        if "habit" in lowered or "lazy" in lowered:
+            return "Your brain is protecting the habit."
+        if "relationship" in lowered:
+            return "This pattern controls you."
+
+        return "Your brain is lying again."
+
+    def _fallback_psychology_hook(self, topic: str) -> str:
+        lowered = topic.lower()
+        if any(token in lowered for token in ("ignore", "lose interest", "pull away", "rejection")):
+            return "This is why it hurts."
+        if "confidence" in lowered:
+            return "Your confidence is being hijacked."
+        if any(token in lowered for token in ("habit", "lazy", "procrastination")):
+            return "Your brain is protecting the habit."
+        if "relationship" in lowered:
+            return "This pattern controls you."
+
+        return "Your brain is lying again."
+
+    def _normalize_history_hook(self, topic: str, hook: str) -> str:
+        normalized_hook = re.sub(r"\s+", " ", hook).strip()
+        if normalized_hook:
+            first_sentence = re.split(r"(?<=[.!?])\s+", normalized_hook)[0].strip()
+            shortened = self._shorten_history_hook(first_sentence)
+            if shortened:
+                return shortened
+
+        return self._fallback_history_hook(topic)
+
+    def _shorten_history_hook(self, hook: str) -> str:
+        cleaned = re.sub(r"\s+", " ", hook).strip()
+        if not cleaned:
+            return ""
+
+        words = cleaned.split()
+        if len(words) <= self.MAX_HISTORY_HOOK_WORDS:
+            return cleaned
+
+        lowered = cleaned.lower()
+        if any(token in lowered for token in ("empire", "kingdom", "dynasty", "rome", "throne")):
+            return "An empire cracked here."
+        if any(token in lowered for token in ("war", "battle", "siege", "army")):
+            return "One battle changed everything."
+        if any(token in lowered for token in ("betray", "traitor", "plot", "assassin")):
+            return "One betrayal changed history."
+        if any(token in lowered for token in ("ship", "ocean", "voyage", "expedition")):
+            return "This voyage went terribly wrong."
+
+        return "History almost forgot this."
+
+    def _fallback_history_hook(self, topic: str) -> str:
+        lowered = topic.lower()
+        if any(token in lowered for token in ("empire", "kingdom", "dynasty", "rome", "throne")):
+            return "An empire cracked here."
+        if any(token in lowered for token in ("war", "battle", "siege", "army")):
+            return "One battle changed everything."
+        if any(token in lowered for token in ("betray", "traitor", "plot", "assassin")):
+            return "One betrayal changed history."
+        if any(token in lowered for token in ("ship", "ocean", "voyage", "expedition")):
+            return "This voyage went terribly wrong."
+
+        return "History almost forgot this."
+
+    def _normalize_history_title(self, topic: str, title: str) -> str:
+        normalized = title.strip()
+        if normalized:
+            return normalized
+        return topic.strip() or "The history they almost forgot"
 
     def _normalize_psychology_title(self, topic: str, title: str) -> str:
         normalized = title.strip()

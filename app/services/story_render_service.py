@@ -17,6 +17,7 @@ class StoryRenderService:
     SCENE_FPS = 30
     SCENE_FADE_IN_SECONDS = 0.18
     SCENE_FADE_OUT_SECONDS = 0.28
+    FIRST_SCENE_FADE_IN_SECONDS = 0.0
     SCENE_START_ZOOM = 1.0
     SCENE_END_ZOOM = 1.06
     SCENE_WORK_WIDTH = 1280
@@ -184,6 +185,7 @@ class StoryRenderService:
                     video_path=Path(scene_source),
                     output_path=scene_clip_path,
                     duration=duration,
+                    is_first_scene=index == 1,
                 )
             elif use_animated_scenes:
                 self._render_animated_scene_clip(
@@ -191,6 +193,7 @@ class StoryRenderService:
                     output_path=scene_clip_path,
                     duration=duration,
                     scene_index=index,
+                    is_first_scene=index == 1,
                     animation_style=payload.animation_style,
                     animation_intensity=payload.animation_intensity,
                 )
@@ -199,6 +202,7 @@ class StoryRenderService:
                     image_path=Path(scene_source),
                     output_path=scene_clip_path,
                     duration=duration,
+                    is_first_scene=index == 1,
                 )
             scene_clip_paths.append(scene_clip_path)
             concat_lines.append(f"file '{scene_clip_path.resolve().as_posix()}'")
@@ -334,13 +338,13 @@ class StoryRenderService:
 
         self.ffmpeg_client.run(command)
 
-    def _render_scene_clip(self, *, image_path: Path, output_path: Path, duration: float) -> None:
+    def _render_scene_clip(self, *, image_path: Path, output_path: Path, duration: float, is_first_scene: bool = False) -> None:
         if duration <= 0:
             raise ValidationError("Scene duration must be greater than zero.")
 
         frame_count = max(int(round(duration * self.SCENE_FPS)), 1)
         progress_denominator = max(frame_count - 1, 1)
-        fade_in = min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
+        fade_in = self.FIRST_SCENE_FADE_IN_SECONDS if is_first_scene else min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
         fade_out = min(self.SCENE_FADE_OUT_SECONDS, max(duration * 0.22, 0.08))
         fade_out_start = max(duration - fade_out, 0.0)
         zoom_expression = (
@@ -358,7 +362,7 @@ class StoryRenderService:
             "scale=1080:1920:flags=lanczos,"
             f"trim=duration={duration},"
             "setpts=PTS-STARTPTS,"
-            f"fade=t=in:st=0:d={fade_in},"
+            f"{'' if fade_in <= 0 else f'fade=t=in:st=0:d={fade_in},'}"
             f"fade=t=out:st={fade_out_start}:d={fade_out},"
             "format=yuv420p"
         )
@@ -395,6 +399,7 @@ class StoryRenderService:
         output_path: Path,
         duration: float,
         scene_index: int,
+        is_first_scene: bool = False,
         animation_style: str | None = None,
         animation_intensity: float = 1.0,
     ) -> None:
@@ -405,7 +410,7 @@ class StoryRenderService:
         progress_denominator = max(frame_count - 1, 1)
         intensity = min(max(animation_intensity, 0.25), 2.0)
         style = (animation_style or "cinematic").strip().lower()
-        fade_in = min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
+        fade_in = self.FIRST_SCENE_FADE_IN_SECONDS if is_first_scene else min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
         fade_out = min(self.SCENE_FADE_OUT_SECONDS, max(duration * 0.22, 0.08))
         fade_out_start = max(duration - fade_out, 0.0)
 
@@ -443,7 +448,7 @@ class StoryRenderService:
             "scale=1080:1920:flags=lanczos,"
             f"trim=duration={duration},"
             "setpts=PTS-STARTPTS,"
-            f"fade=t=in:st=0:d={fade_in},"
+            f"{'' if fade_in <= 0 else f'fade=t=in:st=0:d={fade_in},'}"
             f"fade=t=out:st={fade_out_start}:d={fade_out},"
             "format=yuv420p"
         )
@@ -473,11 +478,11 @@ class StoryRenderService:
             ]
         )
 
-    def _render_existing_scene_video_clip(self, *, video_path: Path, output_path: Path, duration: float) -> None:
+    def _render_existing_scene_video_clip(self, *, video_path: Path, output_path: Path, duration: float, is_first_scene: bool = False) -> None:
         if duration <= 0:
             raise ValidationError("Scene duration must be greater than zero.")
 
-        fade_in = min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
+        fade_in = self.FIRST_SCENE_FADE_IN_SECONDS if is_first_scene else min(self.SCENE_FADE_IN_SECONDS, max(duration * 0.18, 0.06))
         fade_out = min(self.SCENE_FADE_OUT_SECONDS, max(duration * 0.22, 0.08))
         fade_out_start = max(duration - fade_out, 0.0)
         video_filter = (
@@ -486,7 +491,7 @@ class StoryRenderService:
             "crop=1080:1920,"
             f"trim=duration={duration},"
             "setpts=PTS-STARTPTS,"
-            f"fade=t=in:st=0:d={fade_in},"
+            f"{'' if fade_in <= 0 else f'fade=t=in:st=0:d={fade_in},'}"
             f"fade=t=out:st={fade_out_start}:d={fade_out},"
             "format=yuv420p"
         )

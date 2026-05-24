@@ -11,6 +11,8 @@ from app.utils.output_paths import output_url, stage_output_dir
 class TTSService:
     WORDS_PER_SECOND = 2.35
     DEFAULT_PREVIEW_TEXT = "In the last few months, this faceless channel has exploded."
+    NARRATION_BREAK_SECONDS = 0.45
+    SAMPLE_RATE = 24000
     UNSUPPORTED_LANGUAGE_CODES = {"j"}
 
     def __init__(
@@ -152,22 +154,30 @@ class TTSService:
         pipeline = self._kokoro_pipeline(lang_code=lang_code, kmodel_class=KModel, pipeline_class=KPipeline)
         chunks = []
 
-        generator = pipeline(
-            payload.narration,
-            voice=str(voice_path),
-            speed=payload.speaking_rate,
-            split_pattern=r"\n+",
-        )
-        for _graphemes, _phonemes, audio in generator:
-            if audio is None:
-                continue
-            chunks.append(np.asarray(audio, dtype=np.float32))
+        segments = [segment.strip() for segment in re.split(r"\n\s*\n+", payload.narration) if segment.strip()]
+        if not segments:
+            segments = [payload.narration]
+
+        pause = np.zeros(int(self.SAMPLE_RATE * self.NARRATION_BREAK_SECONDS), dtype=np.float32)
+        for segment_index, segment in enumerate(segments):
+            generator = pipeline(
+                segment,
+                voice=str(voice_path),
+                speed=payload.speaking_rate,
+                split_pattern=r"\n+",
+            )
+            for _graphemes, _phonemes, audio in generator:
+                if audio is None:
+                    continue
+                chunks.append(np.asarray(audio, dtype=np.float32))
+            if segment_index < len(segments) - 1:
+                chunks.append(pause)
 
         if not chunks:
             raise IntegrationError("Local Kokoro did not produce audio.")
 
         audio = np.concatenate(chunks)
-        sf.write(str(output_path), audio, 24000)
+        sf.write(str(output_path), audio, self.SAMPLE_RATE)
 
     def _resolve_voice_path(self, voice: str) -> Path:
         if not self.model_path:
@@ -267,7 +277,11 @@ class TTSService:
 
     def _estimate_duration(self, payload: AudioGenerationRequest) -> float:
         word_count = max(len(payload.narration.split()), 1)
-        return max(round((word_count / self.WORDS_PER_SECOND) / payload.speaking_rate, 2), 3.0)
+        break_count = max(len([segment for segment in re.split(r"\n\s*\n+", payload.narration) if segment.strip()]) - 1, 0)
+        return max(
+            round((word_count / self.WORDS_PER_SECOND) / payload.speaking_rate + break_count * self.NARRATION_BREAK_SECONDS, 2),
+            3.0,
+        )
 
     def _audio_duration(self, audio_path: Path) -> float | None:
         try:

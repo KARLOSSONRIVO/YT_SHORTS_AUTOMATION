@@ -19,7 +19,7 @@ class ScriptGenerationRequest(BaseModel):
     target_duration_seconds: int = Field(default=45, ge=15, le=180)
     style_preset: str = "cinematic documentary"
     audience: str | None = None
-    script_framework: str = "standard_story"
+    script_framework: str = "psychology_truth"
 
 
 class ScriptGenerationResponse(BaseModel):
