@@ -1,22 +1,21 @@
 import shutil
+import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
 from app.api.deps import (
     get_ai_animation_service,
-    get_ai_audio_service,
-    get_ai_music_service,
     get_faceless_subtitle_service,
     get_image_service,
     get_llm_service,
+    get_music_service,
     get_story_render_service,
     get_tts_service,
 )
 from app.schemas.faceless_video import (
     AudioGenerationRequest,
     AudioGenerationResponse,
-    GeneratedSceneAmbience,
     SceneAnimationGenerationRequest,
     SceneAnimationGenerationResponse,
     SceneAmbienceGenerationRequest,
@@ -38,11 +37,10 @@ from app.schemas.faceless_video import (
     VoicePreviewResponse,
 )
 from app.services.ai_animation_service import AIAnimationService
-from app.services.ai_audio_service import AIAudioService
-from app.services.ai_music_service import AIMusicService
 from app.services.faceless_subtitle_service import FacelessSubtitleService
 from app.services.image_service import ImageService
 from app.services.llm_service import LLMService
+from app.services.music_service import MusicService
 from app.services.story_render_service import StoryRenderService
 from app.services.tts_service import TTSService
 from app.utils.output_paths import iter_project_output_roots, output_url
@@ -108,59 +106,37 @@ async def generate_animations(
 @router.post("/generate-ambience", response_model=SceneAmbienceGenerationResponse)
 async def generate_ambience(
     payload: SceneAmbienceGenerationRequest,
-    ai_audio_service: AIAudioService = Depends(get_ai_audio_service),
 ) -> SceneAmbienceGenerationResponse:
-    ambience: list[GeneratedSceneAmbience] = []
-    for scene in payload.scenes:
-        generated = ai_audio_service.generate_ambience(
-            scene,
-            duration_seconds=payload.duration_seconds or scene.duration_seconds,
-            output_format=payload.output_format,
-        )
-        ambience.append(
-            GeneratedSceneAmbience(
-                scene_index=scene.scene_index,
-                prompt=generated["prompt"],
-                audio_path=generated["audio_path"],
-                audio_url=_audio_output_url(generated["audio_path"]),
-                duration_seconds=generated["duration_seconds"],
-                cache_key=generated["cache_key"],
-                cached=generated["cached"],
-                mood=generated["mood"],
-                environment=generated["environment"],
-                emotional_tone=generated["emotional_tone"],
-                tension_level=generated["tension_level"],
-            )
-        )
-
+    # Compatibility stage: generated ambience was removed. Rendering uses bundled music assets.
     return SceneAmbienceGenerationResponse(
         job_id=payload.job_id,
         project_id=payload.project_id,
-        ambience=ambience,
+        ambience=[],
     )
 
 
 @router.post("/generate-music", response_model=StoryMusicGenerationResponse)
 async def generate_music(
     payload: StoryMusicGenerationRequest,
-    ai_music_service: AIMusicService = Depends(get_ai_music_service),
+    music_service: MusicService = Depends(get_music_service),
 ) -> StoryMusicGenerationResponse:
-    generated = ai_music_service.generate_music(
-        scenes=payload.scenes,
-        prompt=payload.prompt,
-        mood=payload.mood,
-        duration_seconds=payload.duration_seconds,
-        output_format=payload.output_format,
-    )
+    narration = " ".join(scene.narration for scene in payload.scenes)
+    mood = payload.mood or music_service.detect_mood(narration)
+    music_path = music_service.get_music_for_mood(mood)
+    if not music_path:
+        from app.core.exceptions import IntegrationError
+
+        raise IntegrationError(f"No bundled music file is available for mood '{mood}'.")
+    cache_key = hashlib.sha256(music_path.encode("utf-8")).hexdigest()[:24]
     return StoryMusicGenerationResponse(
         job_id=payload.job_id,
         project_id=payload.project_id,
-        prompt=generated["prompt"],
-        music_path=generated["music_path"],
-        music_url=_audio_output_url(generated["music_path"]),
-        duration_seconds=generated["duration_seconds"],
-        cache_key=generated["cache_key"],
-        cached=generated["cached"],
+        prompt=f"Bundled {mood} music asset",
+        music_path=music_path,
+        music_url=_audio_output_url(music_path),
+        duration_seconds=payload.duration_seconds or 0.0,
+        cache_key=cache_key,
+        cached=True,
     )
 
 

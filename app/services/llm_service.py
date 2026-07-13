@@ -57,7 +57,7 @@ class LLMService:
                 return self._generate_placeholder_script(payload)
             if isinstance(exc, IntegrationError):
                 raise
-            raise IntegrationError(f"Hugging Face script generation failed: {exc}") from exc
+            raise IntegrationError(f"Gemini script generation failed: {exc}") from exc
 
     def detect_mood(self, script: str) -> str:
         normalized_script = re.sub(r"\s+", " ", script.lower())

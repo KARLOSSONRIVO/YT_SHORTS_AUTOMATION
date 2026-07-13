@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,31 +15,25 @@ class Settings(BaseSettings):
     default_max_clip_duration: float = 45.0
     default_top_k: int = 5
 
-    # HuggingFace (remote inference fallback)
-    hf_token: str | None = None
-    hf_inference_base_url: str = "https://api-inference.huggingface.co/models"
-    hf_router_base_url: str = "https://router.huggingface.co/v1"
-    hf_timeout_seconds: float = 0.0
+    ai_timeout_seconds: float = 120.0
     allow_placeholder_generation: bool = False
 
-    # LLM — HuggingFace (remote) settings
-    llm_base_url: str | None = None
-    llm_api_key: str | None = None
-    llm_model: str = "Qwen/Qwen3-4B-Instruct-2507"
-
-    # LLM — Ollama (local) settings
-    use_ollama_for_llm: bool = False
-    ollama_base_url: str = "http://host.docker.internal:11434/v1"
-    ollama_llm_model: str = "qwen2.5:4b"
-
-    # Image generation
-    image_model_base_url: str | None = None
-    image_model: str = "black-forest-labs/FLUX.1-dev"
-    image_model_path: str | None = None  # Local fallback path remains SDXL-specific unless the image service is expanded
-
-    # TTS (Kokoro)
-    tts_model_path: str | None = None
-    tts_model: str = "hexgrad/Kokoro-82M"
+    # Gemini is the only generative AI provider. Faster-whisper remains local STT.
+    gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("PY_WORKER_GEMINI_API_KEY", "GEMINI_API_KEY"),
+    )
+    gemini_model: str = Field(
+        default="gemini-3.5-flash",
+        validation_alias=AliasChoices("PY_WORKER_GEMINI_MODEL", "GEMINI_MODEL"),
+    )
+    gemini_image_model: str = Field(
+        default="gemini-3.1-flash-image",
+        validation_alias=AliasChoices("PY_WORKER_GEMINI_IMAGE_MODEL", "GEMINI_IMAGE_MODEL"),
+    )
+    gemini_tts_model: str = "gemini-3.1-flash-tts-preview"
+    gemini_video_model: str = "gemini-omni-flash-preview"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
     # Background music
     enable_background_music: bool = True
@@ -48,30 +43,6 @@ class Settings(BaseSettings):
     reddit_story_background_video_path: str | None = None
     reddit_story_background_music_path: str | None = None
 
-    # AI-generated cinematic ambience (optional)
-    enable_ai_ambience: bool = False
-    ai_audio_model: str = "stable-audio-open"
-    ai_audio_cache_dir: str = "assets/generated_audio"
-    ai_ambience_volume: float = 0.08
-    ai_audio_duration_seconds: float = 12.0
-    ai_audio_inference_steps: int = 100
-
-    # AI-generated background music (optional, Hugging Face API)
-    enable_ai_music: bool = False
-    ai_music_model: str = "musicgen-small"
-    ai_music_cache_dir: str = "assets/generated_music"
-    ai_music_duration_seconds: float = 30.0
-
-    # AI-generated scene animation (optional, Hugging Face API)
-    enable_ai_animation: bool = False
-    ai_animation_model: str = "Wan-AI/Wan2.2-I2V-A14B"
-    ai_animation_cache_dir: str = "assets/generated_animations"
-    ai_animation_num_frames: int = 81
-    ai_animation_inference_steps: int = 30
-    ai_animation_guidance_scale: float = 5.0
-
-    # Whisper (STT)
-    whisper_hf_model: str = "openai/whisper-large-v3-turbo"
 
     model_config = SettingsConfigDict(
         env_file=".env",

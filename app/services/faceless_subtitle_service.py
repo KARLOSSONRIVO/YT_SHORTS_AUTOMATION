@@ -5,7 +5,6 @@ import re
 import wave
 
 from app.core.exceptions import IntegrationError
-from app.integrations.huggingface_client import HuggingFaceClient
 from app.integrations.whisper_client import WhisperClient
 from app.schemas.faceless_video import (
     StorySubtitleGenerationRequest,
@@ -51,15 +50,11 @@ class FacelessSubtitleService:
         self,
         *,
         output_dir: str,
-        huggingface_client: HuggingFaceClient,
         whisper_client: WhisperClient,
-        whisper_model: str,
         allow_placeholder_generation: bool = False,
     ) -> None:
         self.output_dir = Path(output_dir)
-        self.huggingface_client = huggingface_client
         self.whisper_client = whisper_client
-        self.whisper_model = whisper_model
         self.allow_placeholder_generation = allow_placeholder_generation
 
     def generate_subtitles(
@@ -106,7 +101,7 @@ class FacelessSubtitleService:
         if not payload.audio_path:
             if self.allow_placeholder_generation:
                 return self._scene_timed_cues(payload)
-            raise IntegrationError("audio_path is required for Hugging Face Whisper subtitle generation.")
+            raise IntegrationError("audio_path is required for faster-whisper subtitle generation.")
 
         if self.whisper_client.is_available():
             try:
@@ -119,29 +114,9 @@ class FacelessSubtitleService:
                 if isinstance(exc, IntegrationError) and not self.allow_placeholder_generation:
                     raise
 
-        try:
-            response = self.huggingface_client.transcribe_audio(
-                model=self.whisper_model,
-                audio_path=payload.audio_path,
-            )
-        except Exception as exc:
-            if self.allow_placeholder_generation:
-                return self._scene_timed_cues(payload)
-            if isinstance(exc, IntegrationError):
-                raise
-            raise IntegrationError(f"Hugging Face Whisper transcription failed: {exc}") from exc
-
-        chunks = response.get("chunks")
-        if isinstance(chunks, list) and chunks:
-            cues = self._chunks_to_timed_cues(chunks)
-            if cues:
-                return self._normalize_timed_cues_to_audio(cues=cues, payload=payload)
-
-        text = str(response.get("text") or "").strip()
-        if not text:
-            raise IntegrationError("Hugging Face Whisper returned an empty transcription.")
-
-        return self._text_to_scene_timed_cues(text=text, payload=payload)
+        if self.allow_placeholder_generation:
+            return self._scene_timed_cues(payload)
+        raise IntegrationError("faster-whisper is required for faceless subtitle alignment.")
 
     def _build_local_whisper_cues(self, payload: StorySubtitleGenerationRequest) -> list[TimedCue]:
         transcript = self.whisper_client.transcribe(payload.audio_path, language=None)
