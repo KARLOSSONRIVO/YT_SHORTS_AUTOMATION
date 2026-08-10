@@ -13,6 +13,7 @@ The Python worker received the Groq key and Groq returned HTTP 200 for all three
 - Compute an acceptable spoken-word range from the requested duration, speaking rate, and existing duration ratios. For 60 seconds at 0.96 speaking rate, the range is 112–133 words.
 - Put the exact range in every generation prompt and require scene narration to collectively cover the full narration.
 - When an attempt misses the range, provide the next attempt with the previous word count, estimated duration, and previous narration to revise. The correction aims for the center target rather than the nearest boundary, leaving headroom for small model overshoots.
+- When Groq returns inconsistent top-level and scene narration, select the narration whose estimated duration is closest to the requested target. Scene narration is a first-class candidate because it is the script consumed by downstream scene generation.
 - Keep the existing three-attempt limit, validation ratios, Groq model, and 2,200-token response ceiling.
 
 This directly addresses the observed failure while avoiding extra provider calls.
@@ -27,10 +28,11 @@ This directly addresses the observed failure while avoiding extra provider calls
 
 1. `LLMService` calculates the target and acceptable word range.
 2. Groq receives the range plus a per-scene spoken-word budget.
-3. The parsed response is measured with the existing speaking-rate-aware estimator.
-4. A response inside tolerance returns normally.
-5. A short or long response becomes the repair context for the next attempt.
-6. After three misses, the existing `IntegrationError` remains visible.
+3. The parser compares top-level narration with the combined scene narration and keeps the candidate closest to the target.
+4. The selected response is measured with the existing speaking-rate-aware estimator.
+5. A response inside tolerance returns normally.
+6. A short or long response becomes the repair context for the next attempt.
+7. After three misses, the existing `IntegrationError` remains visible.
 
 ## Testing and Deployment
 

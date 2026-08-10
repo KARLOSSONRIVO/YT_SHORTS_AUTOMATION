@@ -45,6 +45,7 @@
 - [ ] Calculate minimum, target, and maximum word counts from duration, ratios, and speaking rate.
 - [ ] Add the exact accepted range and a derived per-scene budget to every prompt.
 - [ ] On retry, include previous word count, estimated duration, previous narration, and the correction needed to reach the center target rather than merely touching the closest validation boundary.
+- [ ] Compare the top-level narration with combined scene narration and select the candidate closest to the target duration before validation and retry feedback.
 - [ ] Run `python -m unittest tests.test_llm_service_duration -v` and confirm the regression test passes.
 
 ### Task 3: Verify and deploy
