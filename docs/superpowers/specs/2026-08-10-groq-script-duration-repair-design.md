@@ -12,7 +12,7 @@ The Python worker received the Groq key and Groq returned HTTP 200 for all three
 
 - Compute an acceptable spoken-word range from the requested duration, speaking rate, and existing duration ratios. For 60 seconds at 0.96 speaking rate, the range is 112–133 words.
 - Put the exact range in every generation prompt and require scene narration to collectively cover the full narration.
-- When an attempt misses the range, provide the next attempt with the previous word count, estimated duration, exact deficit or excess, and previous narration to revise.
+- When an attempt misses the range, provide the next attempt with the previous word count, estimated duration, and previous narration to revise. The correction aims for the center target rather than the nearest boundary, leaving headroom for small model overshoots.
 - Keep the existing three-attempt limit, validation ratios, Groq model, and 2,200-token response ceiling.
 
 This directly addresses the observed failure while avoiding extra provider calls.
