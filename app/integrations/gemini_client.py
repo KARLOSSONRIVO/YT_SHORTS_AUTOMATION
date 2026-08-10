@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, ProviderRateLimitError
 
 
 class GeminiClient:
@@ -117,7 +117,10 @@ class GeminiClient:
             response = client.post(self.base_url, headers=headers, json=payload)
 
         if response.status_code >= 400:
-            raise IntegrationError(self._error_message(response, prefix=error_prefix))
+            message = self._error_message(response, prefix=error_prefix)
+            if response.status_code == 429:
+                raise ProviderRateLimitError(message)
+            raise IntegrationError(message)
 
         try:
             return response.json()
