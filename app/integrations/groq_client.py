@@ -5,10 +5,12 @@ from typing import Any
 
 import httpx
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, ProviderRateLimitError
 
 
 class GroqClient:
+    QWEN_NON_REASONING_MODELS = {"qwen/qwen3.6-27b"}
+
     def __init__(
         self,
         *,
@@ -16,6 +18,7 @@ class GroqClient:
         base_url: str,
         timeout_seconds: float | None,
         transport: httpx.BaseTransport | None = None,
+        fallback_model: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -23,6 +26,7 @@ class GroqClient:
             timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
         )
         self.transport = transport
+        self.fallback_model = fallback_model.strip() if fallback_model else None
 
     def is_configured(self) -> bool:
         return bool(self.api_key)
@@ -49,6 +53,8 @@ class GroqClient:
             "max_completion_tokens": max_new_tokens,
             "response_format": {"type": "json_object"},
         }
+        if model in self.QWEN_NON_REASONING_MODELS:
+            payload["reasoning_effort"] = "none"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -62,9 +68,27 @@ class GroqClient:
                 headers=headers,
                 json=payload,
             )
+            if (
+                response.status_code == 429
+                and self.fallback_model
+                and self.fallback_model != model
+            ):
+                fallback_payload = {**payload, "model": self.fallback_model}
+                if self.fallback_model in self.QWEN_NON_REASONING_MODELS:
+                    fallback_payload["reasoning_effort"] = "none"
+                else:
+                    fallback_payload.pop("reasoning_effort", None)
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=fallback_payload,
+                )
 
         if response.status_code >= 400:
-            raise IntegrationError(self._error_message(response))
+            message = self._error_message(response)
+            if response.status_code == 429:
+                raise ProviderRateLimitError(message)
+            raise IntegrationError(message)
 
         try:
             body = response.json()

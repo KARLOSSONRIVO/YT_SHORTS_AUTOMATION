@@ -18,7 +18,28 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 120.0
     allow_placeholder_generation: bool = False
 
-    # Gemini is the only generative AI provider. Faster-whisper remains local STT.
+    # Groq generates story scripts, Cloudflare generates scene images, and
+    # Gemini generates speech and video.
+    groq_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("PY_WORKER_GROQ_API_KEY", "GROQ_API_KEY"),
+    )
+    groq_model: str = Field(
+        default="qwen/qwen3.6-27b",
+        validation_alias=AliasChoices("PY_WORKER_GROQ_MODEL", "GROQ_MODEL"),
+    )
+    groq_fallback_model: str | None = Field(
+        default="llama-3.1-8b-instant",
+        validation_alias=AliasChoices(
+            "PY_WORKER_GROQ_FALLBACK_MODEL",
+            "GROQ_FALLBACK_MODEL",
+        ),
+    )
+    groq_base_url: str = Field(
+        default="https://api.groq.com/openai/v1",
+        validation_alias=AliasChoices("PY_WORKER_GROQ_BASE_URL", "GROQ_BASE_URL"),
+    )
+
     gemini_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("PY_WORKER_GEMINI_API_KEY", "GEMINI_API_KEY"),
@@ -27,9 +48,37 @@ class Settings(BaseSettings):
         default="gemini-3.5-flash",
         validation_alias=AliasChoices("PY_WORKER_GEMINI_MODEL", "GEMINI_MODEL"),
     )
-    gemini_image_model: str = Field(
-        default="gemini-3.1-flash-image",
-        validation_alias=AliasChoices("PY_WORKER_GEMINI_IMAGE_MODEL", "GEMINI_IMAGE_MODEL"),
+    cloudflare_account_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "PY_WORKER_CLOUDFLARE_ACCOUNT_ID",
+            "CLOUDFLARE_ACCOUNT_ID",
+        ),
+    )
+    cloudflare_api_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "PY_WORKER_CLOUDFLARE_API_TOKEN",
+            "CLOUDFLARE_API_TOKEN",
+        ),
+    )
+    cloudflare_image_model: str = Field(
+        default="@cf/black-forest-labs/flux-2-klein-4b",
+        validation_alias=AliasChoices(
+            "PY_WORKER_CLOUDFLARE_IMAGE_MODEL",
+            "CLOUDFLARE_IMAGE_MODEL",
+        ),
+    )
+    cloudflare_image_width: int = 1024
+    cloudflare_image_height: int = 1792
+    cloudflare_image_num_steps: int = 8
+    cloudflare_image_guidance: float = 7.5
+    cloudflare_base_url: str = Field(
+        default="https://api.cloudflare.com/client/v4/accounts",
+        validation_alias=AliasChoices(
+            "PY_WORKER_CLOUDFLARE_BASE_URL",
+            "CLOUDFLARE_BASE_URL",
+        ),
     )
     gemini_tts_model: str = "gemini-3.1-flash-tts-preview"
     gemini_video_model: str = "gemini-omni-flash-preview"
@@ -40,13 +89,10 @@ class Settings(BaseSettings):
     default_music_volume: float = 0.15
     enable_audio_ducking: bool = True
     music_assets_path: str = "assets/music"
-    reddit_story_background_video_path: str | None = None
-    reddit_story_background_music_path: str | None = None
-
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="PY_WORKER_",
+        env_ignore_empty=True,
         extra="ignore",
     )
 

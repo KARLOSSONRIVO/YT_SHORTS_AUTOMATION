@@ -1,7 +1,12 @@
 .git
 .venv
+.venv-*
 venv
 __pycache__
 *.pyc
+pytest-cache-files-*
+tmp*
 .env
 uploads
+outputs
+media

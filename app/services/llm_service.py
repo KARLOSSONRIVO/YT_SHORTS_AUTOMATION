@@ -1,8 +1,9 @@
 import json
+import math
 import re
 from typing import Any
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, ProviderRateLimitError
 from app.schemas.faceless_video import (
     FacelessScene,
     ScriptGenerationRequest,
@@ -12,7 +13,8 @@ from app.schemas.faceless_video import (
 
 class LLMService:
     SCRIPT_MAX_ATTEMPTS = 3
-    MIN_DURATION_RATIO = 0.72
+    MIN_DURATION_RATIO = 0.90
+    MAX_DURATION_RATIO = 1.08
     ESTIMATED_WORDS_PER_SECOND = 2.15
     MAX_PSYCHOLOGY_HOOK_WORDS = 8
     MAX_HISTORY_HOOK_WORDS = 9
@@ -31,25 +33,48 @@ class LLMService:
     def generate_story_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
         try:
             last_response: ScriptGenerationResponse | None = None
+            best_response: ScriptGenerationResponse | None = None
+            best_duration_error = float("inf")
+            adjustment = "expand"
             for attempt in range(1, self.SCRIPT_MAX_ATTEMPTS + 1):
-                generated = self.llm_client.generate_text(
-                    model=self.model,
-                    prompt=self._build_prompt(payload, attempt=attempt),
-                    max_new_tokens=2200,
-                    temperature=0.75,
-                )
+                try:
+                    generated = self.llm_client.generate_text(
+                        model=self.model,
+                        prompt=self._build_prompt(
+                            payload,
+                            attempt=attempt,
+                            adjustment=adjustment,
+                            previous_response=last_response,
+                        ),
+                        max_new_tokens=2200,
+                        temperature=0.75,
+                    )
+                except ProviderRateLimitError:
+                    if best_response is not None:
+                        return best_response
+                    raise
                 candidate = self._parse_response(payload, generated)
+                estimated_duration = self._estimate_narration_duration_seconds(
+                    candidate.narration,
+                    payload.speaking_rate,
+                )
+                duration_error = abs(
+                    estimated_duration - payload.target_duration_seconds
+                )
+                if duration_error < best_duration_error:
+                    best_response = candidate
+                    best_duration_error = duration_error
                 if self._meets_duration_target(payload, candidate):
                     return candidate
                 last_response = candidate
-
-            if last_response is not None:
-                estimated = round(self._estimate_narration_duration_seconds(last_response.narration), 1)
-                minimum = round(payload.target_duration_seconds * self.MIN_DURATION_RATIO, 1)
-                raise IntegrationError(
-                    "Generated narration is too short for the requested duration. "
-                    f"Estimated {estimated}s, expected at least {minimum}s."
+                adjustment = (
+                    "shorten"
+                    if estimated_duration > payload.target_duration_seconds
+                    else "expand"
                 )
+
+            if best_response is not None:
+                return best_response
 
             raise IntegrationError("The LLM did not return a usable script.")
         except Exception as exc:
@@ -57,7 +82,7 @@ class LLMService:
                 return self._generate_placeholder_script(payload)
             if isinstance(exc, IntegrationError):
                 raise
-            raise IntegrationError(f"Gemini script generation failed: {exc}") from exc
+            raise IntegrationError(f"Story script generation failed: {exc}") from exc
 
     def detect_mood(self, script: str) -> str:
         normalized_script = re.sub(r"\s+", " ", script.lower())
@@ -69,27 +94,90 @@ class LLMService:
             return "cinematic"
         return "neutral"
 
-    def _build_prompt(self, payload: ScriptGenerationRequest, *, attempt: int = 1) -> str:
-        target_word_count = max(round(payload.target_duration_seconds * self.ESTIMATED_WORDS_PER_SECOND), 45)
+    def _build_prompt(
+        self,
+        payload: ScriptGenerationRequest,
+        *,
+        attempt: int = 1,
+        adjustment: str = "expand",
+        previous_response: ScriptGenerationResponse | None = None,
+    ) -> str:
+        target_word_count = max(round(payload.target_duration_seconds * self.ESTIMATED_WORDS_PER_SECOND * payload.speaking_rate), 45)
+        minimum_word_count = math.ceil(
+            payload.target_duration_seconds
+            * self.MIN_DURATION_RATIO
+            * self.ESTIMATED_WORDS_PER_SECOND
+            * payload.speaking_rate
+        )
+        maximum_word_count = max(
+            math.floor(
+                payload.target_duration_seconds
+                * self.MAX_DURATION_RATIO
+                * self.ESTIMATED_WORDS_PER_SECOND
+                * payload.speaking_rate
+            ),
+            minimum_word_count,
+        )
+        repair_target_word_count = min(
+            max(target_word_count, minimum_word_count),
+            maximum_word_count,
+        )
+        minimum_scene_words = max(math.ceil(minimum_word_count / 8), 1)
+        maximum_scene_words = max(math.ceil(maximum_word_count / 6), minimum_scene_words)
+        duration_instruction = (
+            f"Target narration word count: {repair_target_word_count}.\n"
+            f"Acceptable full narration range: {minimum_word_count} to {maximum_word_count} spoken words.\n"
+            f"For 6 to 8 scenes, average {minimum_scene_words} to {maximum_scene_words} spoken words per scene. "
+            "The combined scene narration must cover the full narration without omitting spoken lines."
+        )
         retry_instruction = ""
-        if attempt > 1:
-            retry_instruction = (
-                "\nIMPORTANT RETRY INSTRUCTION:\n"
-                f"- The previous attempt was too short for {payload.target_duration_seconds} seconds.\n"
-                f"- Make the narration noticeably fuller and closer to {target_word_count} spoken words.\n"
-                "- Add meaningful detail to every scene instead of shortening transitions.\n"
+        if attempt > 1 and previous_response is not None:
+            previous_word_count = self._narration_word_count(previous_response.narration)
+            previous_duration = self._estimate_narration_duration_seconds(
+                previous_response.narration,
+                payload.speaking_rate,
             )
+            if previous_word_count < minimum_word_count:
+                correction = (
+                    f"Add at least {repair_target_word_count - previous_word_count} meaningful spoken words "
+                    "while preserving factual accuracy."
+                )
+            elif previous_word_count > maximum_word_count:
+                correction = (
+                    f"Remove at least {previous_word_count - repair_target_word_count} lower-value spoken words "
+                    "without losing the story's key facts."
+                )
+            else:
+                correction = "Rewrite the narration so its pacing fits the requested duration."
+            retry_instruction = f"""
+IMPORTANT RETRY:
+Previous narration word count: {previous_word_count}
+Previous estimated duration: {previous_duration:.1f} seconds
+Target narration word count: {repair_target_word_count}
+Acceptable full narration range: {minimum_word_count} to {maximum_word_count} spoken words
+Required correction: {correction}
+Previous narration to revise:
+---BEGIN PREVIOUS NARRATION---
+{previous_response.narration}
+---END PREVIOUS NARRATION---
+Return a complete revised JSON response, not commentary about the revision.
+"""
+        elif attempt > 1:
+            action = "Remove repetition and compress lower-value detail" if adjustment == "shorten" else "Add meaningful factual detail to every scene"
+            retry_instruction = f"\nIMPORTANT RETRY: The prior narration was outside {payload.target_duration_seconds}s. {action}; target {target_word_count} spoken words.\n"
 
         if payload.script_framework == "history_story":
             return self._build_history_story_prompt(
                 payload,
                 target_word_count=target_word_count,
+                duration_instruction=duration_instruction,
                 retry_instruction=retry_instruction,
             )
 
         return self._build_psychology_truth_prompt(
             payload,
             target_word_count=target_word_count,
+            duration_instruction=duration_instruction,
             retry_instruction=retry_instruction,
         )
 
@@ -98,6 +186,7 @@ class LLMService:
         payload: ScriptGenerationRequest,
         *,
         target_word_count: int,
+        duration_instruction: str,
         retry_instruction: str,
     ) -> str:
         return f"""
@@ -122,10 +211,12 @@ Required JSON shape:
 }}
 
 Topic: {payload.topic}
+Selected story format: {payload.story_format or "psychological_explanation"}
 Tone: {payload.tone}
 Language: {payload.language}
 Target duration seconds: {payload.target_duration_seconds}
 Approximate target spoken word count: {target_word_count}
+{duration_instruction}
 Visual style preset: {payload.style_preset}
 Audience: {payload.audience or "general short-form viewers"}
 
@@ -152,6 +243,7 @@ Rules:
         payload: ScriptGenerationRequest,
         *,
         target_word_count: int,
+        duration_instruction: str,
         retry_instruction: str,
     ) -> str:
         return f"""
@@ -176,10 +268,12 @@ Required JSON shape:
 }}
 
 Topic: {payload.topic}
+Selected story format: {payload.story_format or "psychological_explanation"}
 Tone: {payload.tone}
 Language: {payload.language}
 Target duration seconds: {payload.target_duration_seconds}
 Approximate target spoken word count: {target_word_count}
+{duration_instruction}
 Visual style preset: {payload.style_preset}
 Audience: {payload.audience or "viewers who respond to blunt psychology truths"}
 
@@ -226,6 +320,7 @@ Rules:
         payload: ScriptGenerationRequest,
         *,
         target_word_count: int,
+        duration_instruction: str,
         retry_instruction: str,
     ) -> str:
         return f"""
@@ -250,14 +345,17 @@ Required JSON shape:
 }}
 
 Topic: {payload.topic}
+Selected story format: {payload.story_format or "hidden_history"}
 Tone: {payload.tone}
 Language: {payload.language}
 Target duration seconds: {payload.target_duration_seconds}
 Approximate target spoken word count: {target_word_count}
+{duration_instruction}
 Visual style preset: {payload.style_preset}
 Audience: {payload.audience or "viewers who enjoy dramatic history stories"}
 
 Beat formula to follow:
+Adapt the beats to the selected story format. Examples: record_breaking_moment = Hook, Context, Challenge, Record, Outcome, Twist; mystery/unsolved = Hook, Setting, Strange Event, Evidence, Main Theory, Unresolved Ending; rise_and_fall = Peak, Origin, Escalation, Fatal Choice, Collapse, Legacy.
 1. Opening hook: a short line that sparks immediate curiosity.
 2. Historical setup: who, where, and what moment we are entering.
 3. Rising tension: what was going wrong or what danger was building.
@@ -315,7 +413,7 @@ Rules:
         if not scenes:
             raise IntegrationError("The LLM did not return any valid scenes.")
 
-        narration = str(data.get("narration") or " ".join(scene.narration for scene in scenes)).strip()
+        top_level_narration = str(data.get("narration") or "").strip()
         title = str(data.get("title") or payload.topic).strip()
         hook = str(data.get("hook") or scenes[0].narration).strip()
         caption_text = str(data.get("caption_text") or hook).strip()
@@ -323,13 +421,22 @@ Rules:
         if payload.script_framework == "history_story":
             hook = self._normalize_history_hook(payload.topic, hook)
             title = self._normalize_history_title(payload.topic, title)
-            narration = self._ensure_psychology_hook_lead(hook, narration)
             scenes = self._ensure_psychology_scene_lead(hook, scenes)
         else:
             hook = self._normalize_psychology_hook(payload.topic, hook)
             title = self._normalize_psychology_title(payload.topic, title)
-            narration = self._ensure_psychology_hook_lead(hook, narration)
             scenes = self._ensure_psychology_scene_lead(hook, scenes)
+
+        scene_narration = " ".join(scene.narration for scene in scenes).strip()
+        normalized_top_level_narration = self._ensure_psychology_hook_lead(
+            hook,
+            top_level_narration or scene_narration,
+        )
+        narration = self._select_narration_closest_to_target(
+            payload,
+            normalized_top_level_narration,
+            scene_narration,
+        )
 
         return ScriptGenerationResponse(
             job_id=payload.job_id,
@@ -342,20 +449,40 @@ Rules:
             caption_text=caption_text,
         )
 
-    def _estimate_narration_duration_seconds(self, narration: str) -> float:
-        words = re.findall(r"\b[\w']+\b", narration)
-        if not words:
+    def _estimate_narration_duration_seconds(self, narration: str, speaking_rate: float = 1.0) -> float:
+        word_count = self._narration_word_count(narration)
+        if not word_count:
             return 0.0
-        return len(words) / self.ESTIMATED_WORDS_PER_SECOND
+        return word_count / (self.ESTIMATED_WORDS_PER_SECOND * speaking_rate)
+
+    def _narration_word_count(self, narration: str) -> int:
+        return len(re.findall(r"\b[\w']+\b", narration))
+
+    def _select_narration_closest_to_target(
+        self,
+        payload: ScriptGenerationRequest,
+        *candidates: str,
+    ) -> str:
+        usable_candidates = [candidate.strip() for candidate in candidates if candidate.strip()]
+        if not usable_candidates:
+            return ""
+        return min(
+            usable_candidates,
+            key=lambda candidate: abs(
+                self._estimate_narration_duration_seconds(candidate, payload.speaking_rate)
+                - payload.target_duration_seconds
+            ),
+        )
 
     def _meets_duration_target(
         self,
         payload: ScriptGenerationRequest,
         response: ScriptGenerationResponse,
     ) -> bool:
-        estimated_duration = self._estimate_narration_duration_seconds(response.narration)
+        estimated_duration = self._estimate_narration_duration_seconds(response.narration, payload.speaking_rate)
         minimum_duration = payload.target_duration_seconds * self.MIN_DURATION_RATIO
-        return estimated_duration >= minimum_duration
+        maximum_duration = payload.target_duration_seconds * self.MAX_DURATION_RATIO
+        return minimum_duration <= estimated_duration <= maximum_duration
 
     def _extract_json(self, generated_text: str) -> dict:
         # Strip <think>...</think> blocks emitted by reasoning models (e.g. Qwen3.5, DeepSeek-R1)

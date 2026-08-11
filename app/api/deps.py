@@ -3,7 +3,9 @@ from functools import lru_cache
 from app.core.config import Settings, get_settings
 from app.integrations.ffprobe_client import FFprobeClient
 from app.integrations.ffmpeg_client import FFmpegClient
+from app.integrations.cloudflare_workers_ai_client import CloudflareWorkersAIClient
 from app.integrations.gemini_client import GeminiClient
+from app.integrations.groq_client import GroqClient
 from app.integrations.whisper_client import WhisperClient
 from app.pipelines.highlight_pipeline import HighlightPipeline
 from app.pipelines.subtitle_pipeline import SubtitlePipeline
@@ -15,7 +17,7 @@ from app.services.hook_scoring_service import HookScoringService
 from app.services.faceless_subtitle_service import FacelessSubtitleService
 from app.services.ai_animation_service import AIAnimationService
 from app.services.image_service import ImageService
-from app.services.gemini_image_generation_service import GeminiImageGenerationService
+from app.services.cloudflare_image_generation_service import CloudflareImageGenerationService
 from app.services.local_media_store_service import LocalMediaStoreService
 from app.services.music_service import MusicService
 from app.services.keyword_scoring_service import KeywordScoringService
@@ -59,11 +61,37 @@ def get_gemini_client() -> GeminiClient:
 
 
 @lru_cache
-def get_gemini_image_generation_service() -> GeminiImageGenerationService:
+def get_groq_client() -> GroqClient:
     settings = get_settings()
-    return GeminiImageGenerationService(
-        gemini_client=get_gemini_client(),
-        model=settings.gemini_image_model,
+    return GroqClient(
+        api_key=settings.groq_api_key,
+        base_url=settings.groq_base_url,
+        timeout_seconds=settings.ai_timeout_seconds,
+        fallback_model=settings.groq_fallback_model,
+    )
+
+
+@lru_cache
+def get_cloudflare_workers_ai_client() -> CloudflareWorkersAIClient:
+    settings = get_settings()
+    return CloudflareWorkersAIClient(
+        account_id=settings.cloudflare_account_id,
+        api_token=settings.cloudflare_api_token,
+        base_url=settings.cloudflare_base_url,
+        timeout_seconds=settings.ai_timeout_seconds,
+    )
+
+
+@lru_cache
+def get_cloudflare_image_generation_service() -> CloudflareImageGenerationService:
+    settings = get_settings()
+    return CloudflareImageGenerationService(
+        cloudflare_client=get_cloudflare_workers_ai_client(),
+        model=settings.cloudflare_image_model,
+        width=settings.cloudflare_image_width,
+        height=settings.cloudflare_image_height,
+        num_steps=settings.cloudflare_image_num_steps,
+        guidance=settings.cloudflare_image_guidance,
     )
 
 
@@ -145,8 +173,8 @@ def get_render_service() -> RenderService:
 def get_llm_service() -> LLMService:
     settings = get_settings()
     return LLMService(
-        llm_client=get_gemini_client(),
-        model=settings.gemini_model,
+        llm_client=get_groq_client(),
+        model=settings.groq_model,
         allow_placeholder_generation=settings.allow_placeholder_generation,
     )
 
@@ -179,7 +207,7 @@ def get_image_service() -> ImageService:
     return ImageService(
         ffmpeg_client=get_ffmpeg_client(),
         output_dir=settings.output_dir,
-        gemini_image_generation_service=get_gemini_image_generation_service(),
+        image_generation_service=get_cloudflare_image_generation_service(),
         allow_placeholder_generation=settings.allow_placeholder_generation,
     )
 
@@ -195,8 +223,6 @@ def get_story_render_service() -> StoryRenderService:
         enable_background_music=settings.enable_background_music,
         default_music_volume=settings.default_music_volume,
         enable_audio_ducking=settings.enable_audio_ducking,
-        reddit_story_background_video_path=settings.reddit_story_background_video_path,
-        reddit_story_background_music_path=settings.reddit_story_background_music_path,
     )
 
 

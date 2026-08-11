@@ -11,7 +11,7 @@ from app.schemas.faceless_video import (
     SceneImageGenerationRequest,
     SceneImageGenerationResponse,
 )
-from app.services.gemini_image_generation_service import GeminiImageGenerationService
+from app.services.cloudflare_image_generation_service import CloudflareImageGenerationService
 from app.utils.output_paths import output_url, stage_output_dir
 
 logger = logging.getLogger(__name__)
@@ -37,12 +37,12 @@ class ImageService:
         *,
         ffmpeg_client,
         output_dir: str,
-        gemini_image_generation_service: GeminiImageGenerationService,
+        image_generation_service: CloudflareImageGenerationService,
         allow_placeholder_generation: bool = False,
     ) -> None:
         self.ffmpeg_client = ffmpeg_client
         self.output_dir = Path(output_dir)
-        self.gemini_image_generation_service = gemini_image_generation_service
+        self.image_generation_service = image_generation_service
         self.allow_placeholder_generation = allow_placeholder_generation
 
     def generate_scene_images(
@@ -64,14 +64,21 @@ class ImageService:
                 visual_style=payload.visual_style,
                 scene_prompt=scene.image_prompt,
             )
-            try:
-                output_path.write_bytes(self._generate_clean_scene_image(prompt))
-            except Exception as exc:
-                if not self.allow_placeholder_generation:
-                    if isinstance(exc, IntegrationError):
-                        raise
-                    raise IntegrationError(f"Image generation failed: {exc}") from exc
-                self._write_placeholder_image(index=index, output_path=output_path)
+            if self._is_reusable_scene_image(output_path):
+                logger.info(
+                    "Reusing completed scene image %s for scene %s.",
+                    output_path,
+                    scene.scene_index,
+                )
+            else:
+                try:
+                    output_path.write_bytes(self._generate_clean_scene_image(prompt))
+                except Exception as exc:
+                    if not self.allow_placeholder_generation:
+                        if isinstance(exc, IntegrationError):
+                            raise
+                        raise IntegrationError(f"Image generation failed: {exc}") from exc
+                    self._write_placeholder_image(index=index, output_path=output_path)
 
             images.append(
                 GeneratedSceneImage(
@@ -132,7 +139,19 @@ class ImageService:
                     "no letters, no captions, no subtitle strip, no footer text, no overlay graphics"
                 )
 
-            candidate = self._post_process_generated_image(self._generate_image(attempt_prompt))
+            try:
+                candidate = self._post_process_generated_image(
+                    self._generate_image(attempt_prompt)
+                )
+            except (IntegrationError, OSError, ValueError) as exc:
+                if last_candidate is None:
+                    raise
+                logger.warning(
+                    "Scene cleanup retry failed after a usable image was generated; "
+                    "keeping the last candidate with safe framing instead. Error: %s",
+                    exc,
+                )
+                return self._force_safe_text_free_framing(last_candidate)
             last_candidate = candidate
 
             if not self._processed_image_still_has_text_like_artifact(candidate):
@@ -157,6 +176,22 @@ class ImageService:
             "applying final safe framing cleanup instead of failing the stage."
         )
         return self._force_safe_text_free_framing(last_candidate)
+
+    def _is_reusable_scene_image(self, output_path: Path) -> bool:
+        if not output_path.is_file() or output_path.stat().st_size <= 0:
+            return False
+
+        try:
+            with Image.open(output_path) as image:
+                width, height = image.size
+                image.verify()
+            return width > 0 and height > 0
+        except (OSError, ValueError):
+            logger.warning(
+                "Existing scene image %s is invalid and will be regenerated.",
+                output_path,
+            )
+            return False
 
     def _domain_specific_boost(self, prompt: str) -> str:
         lowered = prompt.lower()
@@ -201,7 +236,10 @@ class ImageService:
         return "grounded cinematic still frame, realistic environment and subject placement"
 
     def _generate_image(self, prompt: str) -> bytes:
-        return self.gemini_image_generation_service.generate_image(prompt=prompt).image_bytes
+        return self.image_generation_service.generate_image(
+            prompt=prompt,
+            negative_prompt=self.IMAGE_NEGATIVE_PROMPT,
+        ).image_bytes
 
     def _post_process_generated_image(self, image_bytes: bytes) -> bytes:
         with Image.open(BytesIO(image_bytes)) as source_image:

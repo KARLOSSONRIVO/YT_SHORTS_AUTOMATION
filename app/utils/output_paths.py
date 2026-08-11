@@ -85,7 +85,7 @@ def iter_project_output_roots(
     project_title: str | None,
     project_id: str,
     output_bucket: str | None = None,
-    known_buckets: Iterable[str] = ("clipping", "faceless_story", "reddit"),
+    known_buckets: Iterable[str] = ("clipping", "faceless_story"),
 ) -> list[Path]:
     root = Path(output_dir)
     project_folder = project_folder_name(project_title, project_id)

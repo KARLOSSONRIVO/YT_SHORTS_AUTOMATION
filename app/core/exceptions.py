@@ -16,8 +16,13 @@ class MediaError(AppError):
 
 
 class IntegrationError(AppError):
+    def __init__(self, message: str, *, code: str = "integration_error") -> None:
+        super().__init__(message, code=code)
+
+
+class ProviderRateLimitError(IntegrationError):
     def __init__(self, message: str) -> None:
-        super().__init__(message, code="integration_error")
+        super().__init__(message, code="provider_rate_limit")
 
 
 class PaymentRequiredError(IntegrationError):

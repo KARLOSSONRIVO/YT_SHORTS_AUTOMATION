@@ -16,10 +16,12 @@ class ScriptGenerationRequest(BaseModel):
     topic: str
     tone: str = "dramatic"
     language: str = "en"
-    target_duration_seconds: int = Field(default=45, ge=15, le=180)
+    target_duration_seconds: int = Field(default=60, ge=15, le=180)
     style_preset: str = "cinematic documentary"
     audience: str | None = None
     script_framework: str = "psychology_truth"
+    story_format: str | None = None
+    speaking_rate: float = Field(default=1.0, ge=0.5, le=2.0)
 
 
 class ScriptGenerationResponse(BaseModel):
@@ -39,7 +41,7 @@ class AudioGenerationRequest(BaseModel):
     project_title: str | None = None
     output_bucket: str | None = None
     narration: str
-    voice: str = "af_sarah"
+    voice: str = "Kore"
     speaking_rate: float = Field(default=0.82, gt=0)
 
 
@@ -50,27 +52,6 @@ class AudioGenerationResponse(BaseModel):
     audio_url: str
     duration_seconds: float
     voice: str
-
-
-class VoiceOption(BaseModel):
-    voice: str
-    label: str
-    language: str
-    gender: str
-    quality_grade: str | None = None
-    sample_text: str
-
-
-class VoicePreviewRequest(BaseModel):
-    voice: str
-    text: str | None = None
-
-
-class VoicePreviewResponse(BaseModel):
-    voice: str
-    audio_path: str
-    audio_url: str
-    sample_text: str
 
 
 class SubtitleCue(BaseModel):
@@ -171,7 +152,6 @@ class StoryRenderRequest(BaseModel):
     audio_path: str
     subtitles_path: str | None = None
     background_music_path: str | None = None
-    background_video_path: str | None = None
     render_mode: str = "scene_images"
     animation_style: str | None = None
     animation_intensity: float = Field(default=1.0, ge=0.25, le=2.0)

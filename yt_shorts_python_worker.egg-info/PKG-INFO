@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: yt-shorts-python-worker
+Version: 0.1.0
+Summary: Internal Python worker for transcription, clip analysis, and subtitle generation.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: pydantic>=2.8.0
+Requires-Dist: pydantic-settings>=2.4.0
+Requires-Dist: python-multipart>=0.0.9
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: pillow>=10.0.0
+Provides-Extra: media
+Requires-Dist: faster-whisper>=1.0.0; extra == "media"
+
 # YouTube Shorts Python Worker
 
 Internal FastAPI worker for:

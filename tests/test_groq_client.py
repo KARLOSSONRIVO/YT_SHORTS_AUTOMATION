@@ -3,7 +3,7 @@ import unittest
 
 import httpx
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, ProviderRateLimitError
 from app.integrations.groq_client import GroqClient
 
 
@@ -57,6 +57,32 @@ class GroqClientRequestTests(unittest.TestCase):
             },
         )
 
+    def test_qwen_script_generation_disables_reasoning_mode(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["payload"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"title":"Qwen"}'}}]},
+            )
+
+        client = GroqClient(
+            api_key="groq-test-key",
+            base_url="https://api.groq.test/openai/v1",
+            timeout_seconds=30,
+            transport=httpx.MockTransport(handler),
+        )
+
+        client.generate_text(
+            model="qwen/qwen3.6-27b",
+            prompt="Return a story as JSON.",
+        )
+
+        payload = captured["payload"]
+        self.assertIsInstance(payload, dict)
+        self.assertEqual(payload.get("reasoning_effort"), "none")
+
 
 class GroqClientErrorTests(unittest.TestCase):
     def make_client(
@@ -64,12 +90,14 @@ class GroqClientErrorTests(unittest.TestCase):
         handler,
         *,
         api_key: str | None = "groq-test-key",
+        fallback_model: str | None = None,
     ) -> GroqClient:
         return GroqClient(
             api_key=api_key,
             base_url="https://api.groq.test/openai/v1",
             timeout_seconds=30,
             transport=httpx.MockTransport(handler),
+            fallback_model=fallback_model,
         )
 
     def assert_integration_error(self, action, expected_message: str) -> None:
@@ -119,11 +147,18 @@ class GroqClientErrorTests(unittest.TestCase):
         )
 
     def test_generate_text_reports_http_errors(self) -> None:
-        client = self.make_client(
-            lambda request: httpx.Response(
+        requested_models: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested_models.append(json.loads(request.content)["model"])
+            return httpx.Response(
                 401,
                 json={"error": {"message": "invalid API key"}},
             )
+
+        client = self.make_client(
+            handler,
+            fallback_model="llama-3.1-8b-instant",
         )
         self.assert_integration_error(
             lambda: client.generate_text(
@@ -132,6 +167,82 @@ class GroqClientErrorTests(unittest.TestCase):
             ),
             "Groq text API failed with status 401: invalid API key",
         )
+        self.assertEqual(requested_models, ["llama-3.3-70b-versatile"])
+
+    def test_generate_text_falls_back_once_after_rate_limit(self) -> None:
+        requested_payloads: list[dict[str, object]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            requested_payloads.append(payload)
+            if len(requested_payloads) == 1:
+                return httpx.Response(
+                    429,
+                    json={"error": {"message": "daily token limit reached"}},
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"title":"Fallback"}'}}]},
+            )
+
+        client = self.make_client(
+            handler,
+            fallback_model="llama-3.1-8b-instant",
+        )
+
+        result = client.generate_text(
+            model="qwen/qwen3.6-27b",
+            prompt="Return a story as JSON.",
+            max_new_tokens=2200,
+            temperature=0.75,
+        )
+
+        self.assertEqual(result, '{"title":"Fallback"}')
+        self.assertEqual(
+            [payload["model"] for payload in requested_payloads],
+            ["qwen/qwen3.6-27b", "llama-3.1-8b-instant"],
+        )
+        self.assertEqual(requested_payloads[0].get("reasoning_effort"), "none")
+        self.assertNotIn("reasoning_effort", requested_payloads[1])
+        comparable_primary = {
+            key: value
+            for key, value in requested_payloads[0].items()
+            if key not in {"model", "reasoning_effort"}
+        }
+        comparable_fallback = {
+            key: value
+            for key, value in requested_payloads[1].items()
+            if key != "model"
+        }
+        self.assertEqual(comparable_primary, comparable_fallback)
+
+    def test_generate_text_raises_typed_error_when_primary_and_fallback_are_rate_limited(self) -> None:
+        requested_models: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested_models.append(json.loads(request.content)["model"])
+            return httpx.Response(
+                429,
+                json={"error": {"message": "token quota reached"}},
+            )
+
+        client = self.make_client(
+            handler,
+            fallback_model="llama-3.1-8b-instant",
+        )
+
+        with self.assertRaises(ProviderRateLimitError) as caught:
+            client.generate_text(
+                model="qwen/qwen3.6-27b",
+                prompt="Return a story as JSON.",
+            )
+
+        self.assertEqual(
+            requested_models,
+            ["qwen/qwen3.6-27b", "llama-3.1-8b-instant"],
+        )
+        self.assertEqual(caught.exception.code, "provider_rate_limit")
+        self.assertIn("status 429", str(caught.exception))
 
     def test_generate_text_rejects_non_json_response(self) -> None:
         client = self.make_client(
