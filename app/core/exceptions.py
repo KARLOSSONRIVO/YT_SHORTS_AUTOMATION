@@ -25,6 +25,13 @@ class ProviderRateLimitError(IntegrationError):
         super().__init__(message, code="provider_rate_limit")
 
 
+class ContentSafetyError(IntegrationError):
+    """Raised when an image provider rejects a prompt through safety filtering."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="provider_content_safety")
+
+
 class PaymentRequiredError(IntegrationError):
     """Raised when a remote API returns HTTP 402 (Payment Required).
 

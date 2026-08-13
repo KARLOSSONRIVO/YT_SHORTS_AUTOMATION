@@ -14,6 +14,7 @@ class ScriptGenerationRequest(BaseModel):
     project_id: str
     project_title: str | None = None
     topic: str
+    source_text: str | None = None
     tone: str = "dramatic"
     language: str = "en"
     target_duration_seconds: int = Field(default=60, ge=15, le=180)

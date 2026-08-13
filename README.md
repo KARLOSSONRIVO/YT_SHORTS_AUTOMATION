@@ -26,7 +26,7 @@ uvicorn app.main:app --reload
 ## AI providers
 
 Story scripts use Groq. Scene images use Cloudflare Workers AI with
-`@cf/black-forest-labs/flux-2-klein-4b`. Narration speech continues to
+`@cf/black-forest-labs/flux-2-klein-9b`. Narration speech continues to
 use Gemini.
 
 Set these values in `.env`:
@@ -37,17 +37,22 @@ GROQ_MODEL=qwen/qwen3.6-27b
 GROQ_FALLBACK_MODEL=llama-3.1-8b-instant
 CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
 CLOUDFLARE_API_TOKEN=your-cloudflare-workers-ai-token
-CLOUDFLARE_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-4b
+CLOUDFLARE_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-9b
+PY_WORKER_CLOUDFLARE_IMAGE_WIDTH=768
+PY_WORKER_CLOUDFLARE_IMAGE_HEIGHT=1024
+PY_WORKER_CLOUDFLARE_IMAGE_NUM_STEPS=4
+PY_WORKER_CLOUDFLARE_IMAGE_TIMEOUT_SECONDS=300
 GEMINI_API_KEY=your-gemini-api-key
 ```
 
 The Cloudflare API token needs `Workers AI - Read` and `Workers AI - Edit`
-permissions. Scene images are requested sequentially at 1024×1792 and then
-normalized to the worker's 1080×1920 output frame.
+permissions. FLUX.2 Klein 9B scene images are requested sequentially at 768×1024
+and then normalized to the worker's 1080×1920 output frame.
 
-FLUX.2 Klein 4B requests use multipart form data and a fixed four-step
-inference process. The worker keeps the legacy JSON request path available for
-other configured Cloudflare image models.
+FLUX.2 Klein 9B requests use multipart form data and a fixed four-step process.
+The worker keeps the higher-quality `@cf/black-forest-labs/flux-2-dev` model
+available for paid usage and the legacy JSON request path for other configured
+Cloudflare image models.
 
 `GROQ_MODEL` defaults to `qwen/qwen3.6-27b`. When that model returns HTTP 429,
 the worker retries the same request once with `GROQ_FALLBACK_MODEL`, which

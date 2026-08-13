@@ -55,11 +55,12 @@ class GroqSettingsTests(unittest.TestCase):
         self.assertEqual(settings.cloudflare_api_token, "cloudflare-token")
         self.assertEqual(
             settings.cloudflare_image_model,
-            "@cf/black-forest-labs/flux-2-klein-4b",
+            "@cf/black-forest-labs/flux-2-klein-9b",
         )
-        self.assertEqual(settings.cloudflare_image_width, 1024)
-        self.assertEqual(settings.cloudflare_image_height, 1792)
-        self.assertEqual(settings.cloudflare_image_num_steps, 8)
+        self.assertEqual(settings.cloudflare_image_width, 768)
+        self.assertEqual(settings.cloudflare_image_height, 1024)
+        self.assertEqual(settings.cloudflare_image_num_steps, 4)
+        self.assertEqual(settings.cloudflare_image_timeout_seconds, 300)
 
 
 class ProviderRoutingTests(unittest.TestCase):
@@ -121,12 +122,34 @@ class ProviderRoutingTests(unittest.TestCase):
             fallback_model="llama-3.1-8b-instant",
         )
 
+    def test_cloudflare_client_receives_image_specific_timeout(self) -> None:
+        settings = SimpleNamespace(
+            cloudflare_account_id="account-123",
+            cloudflare_api_token="cloudflare-token",
+            cloudflare_base_url="https://api.cloudflare.test/client/v4/accounts",
+            cloudflare_image_timeout_seconds=300,
+        )
+        deps.get_cloudflare_workers_ai_client.cache_clear()
+
+        with (
+            patch.object(deps, "get_settings", return_value=settings),
+            patch.object(deps, "CloudflareWorkersAIClient") as client_class,
+        ):
+            deps.get_cloudflare_workers_ai_client()
+
+        client_class.assert_called_once_with(
+            account_id="account-123",
+            api_token="cloudflare-token",
+            base_url="https://api.cloudflare.test/client/v4/accounts",
+            timeout_seconds=300,
+        )
+
     def test_image_generation_service_receives_cloudflare_client_and_settings(self) -> None:
         settings = SimpleNamespace(
-            cloudflare_image_model="@cf/black-forest-labs/flux-2-klein-4b",
+            cloudflare_image_model="@cf/black-forest-labs/flux-2-klein-9b",
             cloudflare_image_width=1024,
             cloudflare_image_height=1792,
-            cloudflare_image_num_steps=8,
+            cloudflare_image_num_steps=4,
             cloudflare_image_guidance=7.5,
         )
         cloudflare_client = object()
@@ -145,11 +168,11 @@ class ProviderRoutingTests(unittest.TestCase):
         self.assertIs(service.cloudflare_client, cloudflare_client)
         self.assertEqual(
             service.model,
-            "@cf/black-forest-labs/flux-2-klein-4b",
+            "@cf/black-forest-labs/flux-2-klein-9b",
         )
         self.assertEqual(service.width, 1024)
         self.assertEqual(service.height, 1792)
-        self.assertEqual(service.num_steps, 8)
+        self.assertEqual(service.num_steps, 4)
         self.assertEqual(service.guidance, 7.5)
 
     def test_tts_service_still_receives_gemini_client(self) -> None:

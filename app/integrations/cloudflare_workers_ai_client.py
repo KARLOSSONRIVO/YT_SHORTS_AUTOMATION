@@ -8,7 +8,11 @@ from typing import Any
 
 import httpx
 
-from app.core.exceptions import IntegrationError, ProviderRateLimitError
+from app.core.exceptions import (
+    ContentSafetyError,
+    IntegrationError,
+    ProviderRateLimitError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +80,7 @@ class CloudflareWorkersAIClient:
                 timeout=self.timeout_seconds,
                 transport=self.transport,
             ) as client:
-                if model.startswith("@cf/black-forest-labs/flux-2-klein-"):
+                if model.startswith("@cf/black-forest-labs/flux-2-"):
                     flux_prompt = prompt.strip()
                     if negative_prompt and negative_prompt.strip():
                         flux_prompt += f"\nAvoid: {negative_prompt.strip()}"
@@ -86,6 +90,8 @@ class CloudflareWorkersAIClient:
                         "height": (None, str(height)),
                         "guidance": (None, str(guidance)),
                     }
+                    if model == "@cf/black-forest-labs/flux-2-dev":
+                        files["steps"] = (None, str(num_steps))
                     response = client.post(
                         endpoint,
                         headers=auth_headers,
@@ -116,6 +122,8 @@ class CloudflareWorkersAIClient:
             )
             if response.status_code == 429:
                 raise ProviderRateLimitError(message)
+            if self._is_content_safety_rejection(response=response, message=message):
+                raise ContentSafetyError(message)
             raise IntegrationError(message)
 
         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
@@ -223,3 +231,11 @@ class CloudflareWorkersAIClient:
             "Cloudflare Workers AI image generation failed with status "
             f"{status_code}: {detail}"
         )
+
+    def _is_content_safety_rejection(
+        self, *, response: httpx.Response, message: str
+    ) -> bool:
+        if response.status_code != 400:
+            return False
+        lowered = message.lower()
+        return "3030" in message or "output has been flagged" in lowered

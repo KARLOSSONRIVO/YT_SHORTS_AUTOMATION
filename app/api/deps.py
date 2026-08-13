@@ -78,7 +78,7 @@ def get_cloudflare_workers_ai_client() -> CloudflareWorkersAIClient:
         account_id=settings.cloudflare_account_id,
         api_token=settings.cloudflare_api_token,
         base_url=settings.cloudflare_base_url,
-        timeout_seconds=settings.ai_timeout_seconds,
+        timeout_seconds=settings.cloudflare_image_timeout_seconds,
     )
 
 

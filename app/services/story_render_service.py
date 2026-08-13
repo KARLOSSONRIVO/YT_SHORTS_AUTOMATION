@@ -22,6 +22,8 @@ class StoryRenderService:
     SCENE_WORK_HEIGHT = 2276
     MUSIC_MIN_START_OFFSET_SECONDS = 10.0
     MUSIC_MAX_START_OFFSET_SECONDS = 15.0
+    REDDIT_BACKGROUND_VIDEO_DIR = Path(__file__).resolve().parents[1] / "assets" / "video"
+    REDDIT_BACKGROUND_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
     def __init__(
         self,
         ffmpeg_client,
@@ -31,6 +33,7 @@ class StoryRenderService:
         enable_background_music: bool = True,
         default_music_volume: float = 0.15,
         enable_audio_ducking: bool = True,
+        reddit_story_background_video_dir: str | Path | None = None,
     ) -> None:
         self.ffmpeg_client = ffmpeg_client
         self.output_dir = Path(output_dir)
@@ -39,6 +42,7 @@ class StoryRenderService:
         self.enable_background_music = enable_background_music
         self.default_music_volume = default_music_volume
         self.enable_audio_ducking = enable_audio_ducking
+        self.reddit_story_background_video_dir = Path(reddit_story_background_video_dir or self.REDDIT_BACKGROUND_VIDEO_DIR)
 
     def render_story_video(self, payload: StoryRenderRequest) -> StoryRenderResponse:
         if not self.ffmpeg_client.is_available():
@@ -96,6 +100,25 @@ class StoryRenderService:
                     render_audio_path = str(mixed_audio_path.resolve())
                 except IntegrationError:
                     render_audio_path = payload.audio_path
+
+        if payload.render_mode == "background_video":
+            background_video_path = self._select_reddit_background_video()
+            total_duration = max(audio_duration or 0.0, 1.0)
+            output_path = stage_dir / "faceless_story.mp4"
+            self._render_background_video(
+                background_video_path=background_video_path,
+                audio_path=Path(render_audio_path),
+                subtitles_path=Path(payload.subtitles_path) if payload.subtitles_path else None,
+                output_path=output_path,
+                duration=total_duration,
+            )
+            return StoryRenderResponse(
+                job_id=payload.job_id,
+                project_id=payload.project_id,
+                video_path=str(output_path.resolve()),
+                video_url=output_url(output_dir=self.output_dir, file_path=output_path),
+                duration_seconds=round(total_duration, 2),
+            )
 
         scene_video_paths = self._resolve_optional_video_paths(getattr(payload, "scene_video_paths", []))
         if payload.render_mode == "animation_story" and not scene_video_paths and not payload.image_paths:
@@ -208,6 +231,67 @@ class StoryRenderService:
             video_url=output_url(output_dir=self.output_dir, file_path=output_path),
             duration_seconds=round(total_duration, 2),
         )
+
+    def _render_background_video(
+        self,
+        *,
+        background_video_path: Path,
+        audio_path: Path,
+        subtitles_path: Path | None,
+        output_path: Path,
+        duration: float,
+    ) -> None:
+        background_video_duration = self._media_duration(background_video_path)
+        background_start_offset = self._background_video_start_offset(
+            video_duration=background_video_duration,
+            target_duration=duration,
+        )
+        base_video_filter = [
+            "setpts=PTS-STARTPTS",
+            "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos",
+            "crop=1080:1920",
+            "format=yuv420p",
+        ]
+        if subtitles_path:
+            subtitle_filter = f"subtitles='{self._escape_filter_path(subtitles_path)}'"
+            if self.FONT_DIR.exists():
+                subtitle_filter += f":fontsdir='{self._escape_filter_path(self.FONT_DIR)}'"
+            base_video_filter.append(subtitle_filter)
+
+        command = ["ffmpeg", "-y"]
+        if background_start_offset > 0:
+            command.extend(["-ss", str(round(background_start_offset, 2))])
+        command.extend(
+            [
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(background_video_path),
+                "-i",
+                str(audio_path),
+                "-vf",
+                ",".join(base_video_filter),
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-r",
+                str(self.SCENE_FPS),
+                "-t",
+                str(duration),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-c:a",
+                "aac",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
+        self.ffmpeg_client.run(command)
 
     def _render_scene_clip(self, *, image_path: Path, output_path: Path, duration: float, is_first_scene: bool = False) -> None:
         if duration <= 0:
@@ -550,6 +634,58 @@ class StoryRenderService:
                 return round(frame_count / float(frame_rate), 2)
         except (FileNotFoundError, wave.Error):
             return None
+
+    def _select_reddit_background_video(self) -> Path:
+        if not self.reddit_story_background_video_dir.exists():
+            raise ValidationError("A Reddit story background video must be available in app/assets/video.")
+
+        candidates = sorted(
+            path.resolve()
+            for path in self.reddit_story_background_video_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in self.REDDIT_BACKGROUND_VIDEO_EXTENSIONS
+        )
+        if not candidates:
+            raise ValidationError("A Reddit story background video must be available in app/assets/video.")
+        return random.choice(candidates)
+
+    def _media_duration(self, media_path: Path) -> float | None:
+        if not shutil.which("ffprobe") or not media_path.exists():
+            return None
+
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+
+        try:
+            duration = float(result.stdout.strip())
+        except ValueError:
+            return None
+        return duration if duration > 0 else None
+
+    def _background_video_start_offset(self, *, video_duration: float | None, target_duration: float) -> float:
+        if video_duration is None or video_duration <= target_duration + 0.5:
+            if video_duration is None or video_duration <= 8:
+                return 0.0
+            return random.uniform(0.0, max(video_duration - 6.0, 0.0))
+
+        max_offset = max(video_duration - target_duration, 0.0)
+        if max_offset <= 0:
+            return 0.0
+        return random.uniform(0.0, max_offset)
 
     def mix_audio_with_music(
         self,

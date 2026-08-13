@@ -1,11 +1,13 @@
 from io import BytesIO
 from pathlib import Path
+import hashlib
+import json
 import logging
 import re
 
 from PIL import Image
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import ContentSafetyError, IntegrationError
 from app.schemas.faceless_video import (
     GeneratedSceneImage,
     SceneImageGenerationRequest,
@@ -64,15 +66,17 @@ class ImageService:
                 visual_style=payload.visual_style,
                 scene_prompt=scene.image_prompt,
             )
-            if self._is_reusable_scene_image(output_path):
+            if self._is_reusable_scene_image(output_path, prompt=prompt):
                 logger.info(
                     "Reusing completed scene image %s for scene %s.",
                     output_path,
                     scene.scene_index,
                 )
             else:
+                self._generation_manifest_path(output_path).unlink(missing_ok=True)
                 try:
                     output_path.write_bytes(self._generate_clean_scene_image(prompt))
+                    self._write_generation_manifest(output_path, prompt=prompt)
                 except Exception as exc:
                     if not self.allow_placeholder_generation:
                         if isinstance(exc, IntegrationError):
@@ -130,19 +134,29 @@ class ImageService:
 
     def _generate_clean_scene_image(self, prompt: str) -> bytes:
         last_candidate: bytes | None = None
+        generation_prompt = prompt
 
         for attempt in range(self.IMAGE_GENERATION_ATTEMPTS):
-            attempt_prompt = prompt
+            attempt_prompt = generation_prompt
             if attempt > 0:
                 attempt_prompt = (
-                    f"{prompt}, clean cinematic still frame only, absolutely no text artifacts, "
+                    f"{generation_prompt}, clean cinematic still frame only, absolutely no text artifacts, "
                     "no letters, no captions, no subtitle strip, no footer text, no overlay graphics"
                 )
 
             try:
-                candidate = self._post_process_generated_image(
-                    self._generate_image(attempt_prompt)
-                )
+                try:
+                    generated_image = self._generate_image(attempt_prompt)
+                except ContentSafetyError:
+                    if generation_prompt != prompt:
+                        raise
+                    generation_prompt = self._content_safe_fallback_prompt(prompt)
+                    logger.warning(
+                        "Cloudflare rejected a scene prompt through content safety filtering; "
+                        "retrying with a safe anonymous version of the same scene."
+                    )
+                    generated_image = self._generate_image(generation_prompt)
+                candidate = self._post_process_generated_image(generated_image)
             except (IntegrationError, OSError, ValueError) as exc:
                 if last_candidate is None:
                     raise
@@ -177,7 +191,44 @@ class ImageService:
         )
         return self._force_safe_text_free_framing(last_candidate)
 
-    def _is_reusable_scene_image(self, output_path: Path) -> bool:
+    def _content_safe_fallback_prompt(self, prompt: str) -> str:
+        lowered = prompt.lower()
+
+        if "baseball" in lowered:
+            action = "focused before the next play"
+            if any(token in lowered for token in ("hit", "swing", "bat", "home run")):
+                action = "swinging a bat during a game"
+            elif any(token in lowered for token in ("pitch", "mound", "strikeout")):
+                action = "pitching from the mound during a game"
+            return (
+                "adult baseball player in a plain unbranded uniform, "
+                f"{action}, realistic baseball stadium and softly blurred crowd, "
+                "cinematic sports photography, unobstructed stadium backdrop, "
+                "no celebrity likeness, no readable text, no logos, no names, no jersey numbers"
+            )
+
+        sports = {
+            "basketball": "adult basketball player in a plain unbranded uniform on a realistic indoor court",
+            "soccer": "adult soccer player in a plain unbranded uniform on a realistic outdoor pitch",
+            "football": "adult American football player in plain unbranded protective gear on a realistic field",
+            "boxing": "adult boxer wearing plain gloves in a realistic boxing ring",
+            "mma": "adult martial artist in plain sportswear inside a realistic training arena",
+        }
+        for token, scene in sports.items():
+            if token in lowered:
+                return (
+                    f"{scene}, cinematic sports photography, believable game action, "
+                    "no celebrity likeness, no readable text, no logos, no names, no numbers, "
+                    "unobstructed stadium or arena backdrop"
+                )
+
+        return (
+            "adult person in a realistic everyday setting related to the story, "
+            "natural facial features and believable body proportions, cinematic documentary photography, "
+            "no celebrity likeness, no readable text, no logos, no signs, no screens, no watermark"
+        )
+
+    def _is_reusable_scene_image(self, output_path: Path, *, prompt: str) -> bool:
         if not output_path.is_file() or output_path.stat().st_size <= 0:
             return False
 
@@ -185,7 +236,8 @@ class ImageService:
             with Image.open(output_path) as image:
                 width, height = image.size
                 image.verify()
-            return width > 0 and height > 0
+            if width <= 0 or height <= 0:
+                return False
         except (OSError, ValueError):
             logger.warning(
                 "Existing scene image %s is invalid and will be regenerated.",
@@ -193,9 +245,45 @@ class ImageService:
             )
             return False
 
+        manifest_path = self._generation_manifest_path(output_path)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            logger.info(
+                "Existing scene image %s has no valid generation manifest and will be regenerated.",
+                output_path,
+            )
+            return False
+
+        return manifest == self._generation_manifest(prompt)
+
+    def _generation_manifest_path(self, output_path: Path) -> Path:
+        return output_path.with_suffix(".generation.json")
+
+    def _generation_manifest(self, prompt: str) -> dict[str, str | int]:
+        model = str(getattr(self.image_generation_service, "model", "unknown"))
+        return {
+            "version": 1,
+            "provider": "cloudflare_workers_ai",
+            "model": model,
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        }
+
+    def _write_generation_manifest(self, output_path: Path, *, prompt: str) -> None:
+        self._generation_manifest_path(output_path).write_text(
+            json.dumps(self._generation_manifest(prompt), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
     def _domain_specific_boost(self, prompt: str) -> str:
         lowered = prompt.lower()
         sports_terms = {
+            "tennis": (
+                "realistic professional tennis scene on a regulation grass tennis court, visible tennis net and court lines, "
+                "correctly held tennis racket and regulation tennis ball, plausible tennis posture, each person has exactly "
+                "two arms and exactly two legs, full-body subjects clearly separated with no overlapping limbs, "
+                "plain tennis clothing with no readable names, numbers, or logos"
+            ),
             "soccer": (
                 "realistic association football scene, regulation soccer ball, believable stadium perspective, "
                 "athlete in a plausible kicking or sprinting pose, correct goal or pitch context, "

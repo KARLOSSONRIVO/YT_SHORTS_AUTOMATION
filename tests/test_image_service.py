@@ -1,11 +1,12 @@
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from PIL import Image
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import ContentSafetyError, IntegrationError
 from app.schemas.faceless_video import FacelessScene, SceneImageGenerationRequest
 from app.services.image_service import ImageService
 
@@ -21,7 +22,9 @@ class ImageServiceTests(unittest.TestCase):
         return ImageService(
             ffmpeg_client=None,
             output_dir=output_dir,
-            image_generation_service=None,
+            image_generation_service=SimpleNamespace(
+                model="@cf/black-forest-labs/flux-2-dev"
+            ),
         )
 
     def make_payload(self) -> SceneImageGenerationRequest:
@@ -80,6 +83,53 @@ class ImageServiceTests(unittest.TestCase):
 
         self.assertIn("authentication failed", str(caught.exception))
 
+    def test_tennis_prompt_adds_court_equipment_and_pose_constraints(self) -> None:
+        service = self.make_service("unused")
+
+        prompt = service._compose_generation_prompt(
+            visual_style="cinematic sports documentary",
+            scene_prompt=(
+                "An exhausted tennis player collapses after a long rally while "
+                "an official approaches"
+            ),
+        )
+
+        self.assertIn("grass tennis court", prompt)
+        self.assertIn("tennis racket", prompt)
+        self.assertIn("tennis net", prompt)
+        self.assertIn("exactly two legs", prompt)
+        self.assertIn("plausible tennis posture", prompt)
+
+    def test_content_safety_rejection_retries_with_neutral_background_prompt(self) -> None:
+        service = self.make_service("unused")
+        prompts: list[str] = []
+
+        def generate(prompt: str) -> bytes:
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                raise ContentSafetyError("Cloudflare output was flagged")
+            return png_bytes(color="teal")
+
+        with (
+            patch.object(service, "_generate_image", side_effect=generate),
+            patch.object(
+                service,
+                "_processed_image_still_has_text_like_artifact",
+                return_value=False,
+            ),
+        ):
+            result = service._generate_clean_scene_image(
+                "Close-up of a well-known baseball star at a scoreboard"
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("well-known baseball star", prompts[0])
+        self.assertIn("adult baseball player", prompts[1])
+        self.assertIn("baseball stadium", prompts[1])
+        self.assertNotIn("well-known baseball star", prompts[1])
+        self.assertNotIn("scoreboard", prompts[1])
+
     def test_valid_existing_scene_is_reused_without_generation(self) -> None:
         output_dir = Path.cwd()
         service = self.make_service(str(output_dir))
@@ -87,8 +137,21 @@ class ImageServiceTests(unittest.TestCase):
         scene_dir = output_dir / "tests"
         scene_path = scene_dir / "scene_01.png"
         self.addCleanup(scene_path.unlink, missing_ok=True)
-        original = png_bytes(color="green")
-        scene_path.write_bytes(original)
+        self.addCleanup(scene_path.with_suffix(".generation.json").unlink, missing_ok=True)
+        with (
+            patch(
+                "app.services.image_service.stage_output_dir",
+                return_value=scene_dir,
+            ),
+            patch.object(
+                service,
+                "_generate_clean_scene_image",
+                return_value=png_bytes(color="green"),
+            ),
+        ):
+            first_response = service.generate_scene_images(payload)
+
+        original = scene_path.read_bytes()
 
         with (
             patch(
@@ -104,7 +167,38 @@ class ImageServiceTests(unittest.TestCase):
             response = service.generate_scene_images(payload)
 
         self.assertEqual(scene_path.read_bytes(), original)
+        self.assertEqual(
+            first_response.images[0].image_path,
+            response.images[0].image_path,
+        )
         self.assertEqual(response.images[0].image_path, str(scene_path.resolve()))
+
+    def test_existing_scene_without_matching_generation_manifest_is_regenerated(self) -> None:
+        output_dir = Path.cwd()
+        service = self.make_service(str(output_dir))
+        payload = self.make_payload()
+        scene_dir = output_dir / "tests"
+        scene_path = scene_dir / "scene_01.png"
+        self.addCleanup(scene_path.unlink, missing_ok=True)
+        self.addCleanup(scene_path.with_suffix(".generation.json").unlink, missing_ok=True)
+        scene_path.write_bytes(png_bytes(color="green"))
+        replacement = png_bytes(color="orange")
+
+        with (
+            patch(
+                "app.services.image_service.stage_output_dir",
+                return_value=scene_dir,
+            ),
+            patch.object(
+                service,
+                "_generate_clean_scene_image",
+                return_value=replacement,
+            ) as generate,
+        ):
+            service.generate_scene_images(payload)
+
+        self.assertEqual(scene_path.read_bytes(), replacement)
+        generate.assert_called_once()
 
     def test_corrupt_existing_scene_is_regenerated(self) -> None:
         output_dir = Path.cwd()
@@ -113,6 +207,7 @@ class ImageServiceTests(unittest.TestCase):
         scene_dir = output_dir / "tests"
         scene_path = scene_dir / "scene_01.png"
         self.addCleanup(scene_path.unlink, missing_ok=True)
+        self.addCleanup(scene_path.with_suffix(".generation.json").unlink, missing_ok=True)
         scene_path.write_bytes(b"not-an-image")
         replacement = png_bytes(color="purple")
 

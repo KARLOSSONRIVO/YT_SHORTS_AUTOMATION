@@ -166,6 +166,14 @@ Return a complete revised JSON response, not commentary about the revision.
             action = "Remove repetition and compress lower-value detail" if adjustment == "shorten" else "Add meaningful factual detail to every scene"
             retry_instruction = f"\nIMPORTANT RETRY: The prior narration was outside {payload.target_duration_seconds}s. {action}; target {target_word_count} spoken words.\n"
 
+        if payload.script_framework == "reddit_story":
+            return self._build_reddit_story_prompt(
+                payload,
+                target_word_count=target_word_count,
+                duration_instruction=duration_instruction,
+                retry_instruction=retry_instruction,
+            )
+
         if payload.script_framework == "history_story":
             return self._build_history_story_prompt(
                 payload,
@@ -311,6 +319,62 @@ Rules:
 - The image prompt must explicitly avoid any text-bearing elements in the frame: no signs, no captions, no subtitles, no posters, no screens with text, no scoreboard text, no jersey names, no jersey numbers, no uniform lettering, no labels, no banners.
 - Avoid extra limbs, broken anatomy, floating objects, duplicated people, visible text, logos, watermarks, scoreboards, UI overlays, or subtitles.
 - The total scene durations should be close to the target duration.
+- Return JSON only.
+{retry_instruction}
+""".strip()
+
+    def _build_reddit_story_prompt(
+        self,
+        payload: ScriptGenerationRequest,
+        *,
+        target_word_count: int,
+        duration_instruction: str,
+        retry_instruction: str,
+    ) -> str:
+        source_title = payload.project_title or payload.topic
+        source_text = payload.source_text or payload.topic
+        return f"""
+You create a short-form dramatized retelling of a Reddit submission for YouTube Shorts and TikTok.
+Return only valid JSON. Do not wrap it in markdown.
+
+Required JSON shape:
+{{
+  "title": "a concise title that stays close to the Reddit submission title",
+  "hook": "short punchy opening hook",
+  "narration": "full narration script",
+  "caption_text": "short social caption",
+  "scenes": [
+    {{
+      "scene_index": 1,
+      "narration": "scene narration",
+      "image_prompt": "vertical 9:16 cinematic visual prompt, no text, no logos",
+      "duration_seconds": 6,
+      "caption_text": "short subtitle text"
+    }}
+  ]
+}}
+
+Reddit submission title: {source_title}
+Reddit submission text: {source_text}
+Selected story format: {payload.story_format or "unexpected_ending"}
+Tone: {payload.tone}
+Language: {payload.language}
+Target duration seconds: {payload.target_duration_seconds}
+Approximate target spoken word count: {target_word_count}
+{duration_instruction}
+Visual style preset: {payload.style_preset}
+Audience: {payload.audience or "viewers who enjoy emotionally engaging Reddit stories"}
+
+Rules:
+- Use the Reddit submission above as the only story source.
+- Do not turn this into history, war, politics, mythology, or a different unrelated story.
+- Do not invent historical names, dates, battles, countries, uniforms, or events.
+- Preserve the submission's central people, relationships, situation, and decision.
+- If the feed contains only a title, create a clearly dramatized fictional retelling of that title while keeping its premise unchanged.
+- Keep the title close to the Reddit submission title; never replace it with an unrelated title.
+- Do not claim the anonymous submission is independently verified.
+- Start directly with the spoken hook and create 6 to 8 scenes.
+- Make every image prompt describe one specific frozen moment with realistic human behavior and no visible text, logos, watermarks, or subtitles.
 - Return JSON only.
 {retry_instruction}
 """.strip()

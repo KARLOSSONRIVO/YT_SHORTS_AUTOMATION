@@ -63,16 +63,17 @@ class Settings(BaseSettings):
         ),
     )
     cloudflare_image_model: str = Field(
-        default="@cf/black-forest-labs/flux-2-klein-4b",
+        default="@cf/black-forest-labs/flux-2-klein-9b",
         validation_alias=AliasChoices(
             "PY_WORKER_CLOUDFLARE_IMAGE_MODEL",
             "CLOUDFLARE_IMAGE_MODEL",
         ),
     )
-    cloudflare_image_width: int = 1024
-    cloudflare_image_height: int = 1792
-    cloudflare_image_num_steps: int = 8
+    cloudflare_image_width: int = 768
+    cloudflare_image_height: int = 1024
+    cloudflare_image_num_steps: int = 4
     cloudflare_image_guidance: float = 7.5
+    cloudflare_image_timeout_seconds: float = 300.0
     cloudflare_base_url: str = Field(
         default="https://api.cloudflare.com/client/v4/accounts",
         validation_alias=AliasChoices(
