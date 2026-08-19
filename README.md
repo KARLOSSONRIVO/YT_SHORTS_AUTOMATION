@@ -25,38 +25,39 @@ uvicorn app.main:app --reload
 
 ## AI providers
 
-Story scripts use Groq. Scene images use Cloudflare Workers AI with
-`@cf/black-forest-labs/flux-2-klein-9b`. Narration speech continues to
-use Gemini.
+Story scripts use Groq. Scene images use Pollinations `flux` directly.
+Narration speech uses Gemini with Pollinations `elevenlabs` (ElevenLabs v3)
+only when Gemini returns HTTP 429.
 
 Set these values in `.env`:
 
 ```text
 GROQ_API_KEY=your-groq-api-key
 GROQ_MODEL=qwen/qwen3.6-27b
-GROQ_FALLBACK_MODEL=llama-3.1-8b-instant
-CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
-CLOUDFLARE_API_TOKEN=your-cloudflare-workers-ai-token
-CLOUDFLARE_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-9b
-PY_WORKER_CLOUDFLARE_IMAGE_WIDTH=768
-PY_WORKER_CLOUDFLARE_IMAGE_HEIGHT=1024
-PY_WORKER_CLOUDFLARE_IMAGE_NUM_STEPS=4
-PY_WORKER_CLOUDFLARE_IMAGE_TIMEOUT_SECONDS=300
+GROQ_FALLBACK_MODEL=openai/gpt-oss-20b
+POLLINATIONS_API_KEY=your-pollinations-secret-key
+PY_WORKER_POLLINATIONS_IMAGE_MODEL=flux
+PY_WORKER_POLLINATIONS_IMAGE_WIDTH=768
+PY_WORKER_POLLINATIONS_IMAGE_HEIGHT=1024
+PY_WORKER_POLLINATIONS_IMAGE_TIMEOUT_SECONDS=300
+PY_WORKER_POLLINATIONS_TTS_MODEL=elevenlabs
 GEMINI_API_KEY=your-gemini-api-key
 ```
 
-The Cloudflare API token needs `Workers AI - Read` and `Workers AI - Edit`
-permissions. FLUX.2 Klein 9B scene images are requested sequentially at 768×1024
-and then normalized to the worker's 1080×1920 output frame.
+Pollinations `flux` scene images are requested sequentially at 768×1024 and
+then normalized to the worker's 1080×1920 output frame. Pollinations usage
+consumes Pollen according to the account's available tier or paid balance.
 
-FLUX.2 Klein 9B requests use multipart form data and a fixed four-step process.
-The worker keeps the higher-quality `@cf/black-forest-labs/flux-2-dev` model
-available for paid usage and the legacy JSON request path for other configured
-Cloudflare image models.
+If Gemini narration returns HTTP 429 and Pollinations is configured, the
+worker sends the narration to ElevenLabs v3 with a named narrator selected
+from the script and inline emotional delivery tags. The configured speaking
+rate, deterministic seed, and reference-matched loudness processing are kept.
+Other Gemini errors do not trigger this fallback. Pollinations currently marks
+ElevenLabs v3 as paid-only, so it requires paid Pollen.
 
 `GROQ_MODEL` defaults to `qwen/qwen3.6-27b`. When that model returns HTTP 429,
 the worker retries the same request once with `GROQ_FALLBACK_MODEL`, which
-defaults to `llama-3.1-8b-instant`. Other errors do not trigger the fallback,
+defaults to `openai/gpt-oss-20b`. Other errors do not trigger the fallback,
 and script generation never falls back to Gemini.
 
 ## Docker

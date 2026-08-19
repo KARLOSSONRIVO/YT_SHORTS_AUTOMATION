@@ -158,7 +158,7 @@ class GroqClientErrorTests(unittest.TestCase):
 
         client = self.make_client(
             handler,
-            fallback_model="llama-3.1-8b-instant",
+            fallback_model="openai/gpt-oss-20b",
         )
         self.assert_integration_error(
             lambda: client.generate_text(
@@ -187,7 +187,7 @@ class GroqClientErrorTests(unittest.TestCase):
 
         client = self.make_client(
             handler,
-            fallback_model="llama-3.1-8b-instant",
+            fallback_model="openai/gpt-oss-20b",
         )
 
         result = client.generate_text(
@@ -200,7 +200,7 @@ class GroqClientErrorTests(unittest.TestCase):
         self.assertEqual(result, '{"title":"Fallback"}')
         self.assertEqual(
             [payload["model"] for payload in requested_payloads],
-            ["qwen/qwen3.6-27b", "llama-3.1-8b-instant"],
+            ["qwen/qwen3.6-27b", "openai/gpt-oss-20b"],
         )
         self.assertEqual(requested_payloads[0].get("reasoning_effort"), "none")
         self.assertNotIn("reasoning_effort", requested_payloads[1])
@@ -228,7 +228,7 @@ class GroqClientErrorTests(unittest.TestCase):
 
         client = self.make_client(
             handler,
-            fallback_model="llama-3.1-8b-instant",
+            fallback_model="openai/gpt-oss-20b",
         )
 
         with self.assertRaises(ProviderRateLimitError) as caught:
@@ -239,10 +239,60 @@ class GroqClientErrorTests(unittest.TestCase):
 
         self.assertEqual(
             requested_models,
-            ["qwen/qwen3.6-27b", "llama-3.1-8b-instant"],
+            ["qwen/qwen3.6-27b", "openai/gpt-oss-20b"],
         )
         self.assertEqual(caught.exception.code, "provider_rate_limit")
         self.assertIn("status 429", str(caught.exception))
+
+    def test_generate_text_preserves_primary_rate_limit_when_fallback_rejects_json(self) -> None:
+        requested_models: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested_models.append(json.loads(request.content)["model"])
+            if len(requested_models) == 1:
+                return httpx.Response(
+                    429,
+                    headers={
+                        "retry-after": "42",
+                        "x-ratelimit-remaining-tokens": "0",
+                        "x-ratelimit-reset-tokens": "41.5s",
+                    },
+                    json={"error": {"message": "TPM limit reached"}},
+                )
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Failed to validate JSON. Please adjust your prompt."
+                    }
+                },
+            )
+
+        client = self.make_client(
+            handler,
+            fallback_model="openai/gpt-oss-20b",
+        )
+
+        with self.assertRaises(ProviderRateLimitError) as caught:
+            client.generate_text(
+                model="qwen/qwen3.6-27b",
+                prompt="Return a story as JSON.",
+            )
+
+        self.assertEqual(
+            requested_models,
+            ["qwen/qwen3.6-27b", "openai/gpt-oss-20b"],
+        )
+        self.assertIn("status 429: TPM limit reached", str(caught.exception))
+        self.assertEqual(caught.exception.response_headers["retry-after"], "42")
+        self.assertEqual(
+            caught.exception.response_headers["x-ratelimit-remaining-tokens"],
+            "0",
+        )
+        self.assertEqual(
+            caught.exception.response_headers["x-ratelimit-reset-tokens"],
+            "41.5s",
+        )
 
     def test_generate_text_rejects_non_json_response(self) -> None:
         client = self.make_client(

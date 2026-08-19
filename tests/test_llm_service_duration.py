@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from app.core.exceptions import ProviderRateLimitError
+from app.core.exceptions import IntegrationError, ProviderRateLimitError
 from app.schemas.faceless_video import ScriptGenerationRequest
 from app.services.llm_service import LLMService
 
@@ -115,6 +115,7 @@ class SceneAwareRepairTextClient:
 class AlwaysOutOfWindowTextClient:
     def __init__(self) -> None:
         self.calls = 0
+        self.max_new_tokens: list[int] = []
         self.responses = (
             FAR_SHORT_NARRATION,
             FAR_LONG_NARRATION,
@@ -122,6 +123,7 @@ class AlwaysOutOfWindowTextClient:
         )
 
     def generate_text(self, **kwargs) -> str:
+        self.max_new_tokens.append(kwargs["max_new_tokens"])
         narration = self.responses[self.calls]
         self.calls += 1
         return script_response(narration)
@@ -141,6 +143,19 @@ class RateLimitedAfterCandidateTextClient:
 class AlwaysRateLimitedTextClient:
     def generate_text(self, **kwargs) -> str:
         raise ProviderRateLimitError("Groq quota reached")
+
+
+class InvalidFallbackAfterCandidateTextClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate_text(self, **kwargs) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return script_response(FAR_SHORT_NARRATION)
+        raise IntegrationError(
+            "Groq text API failed with status 400: Failed to validate JSON."
+        )
 
 
 class LLMServiceDurationTests(unittest.TestCase):
@@ -223,8 +238,9 @@ class LLMServiceDurationTests(unittest.TestCase):
 
         result = service.generate_story_script(payload)
 
-        self.assertEqual(client.calls, 3)
-        self.assertEqual(result.narration, CLOSEST_LONG_NARRATION)
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(client.max_new_tokens, [1600, 1600])
+        self.assertEqual(result.narration, FAR_LONG_NARRATION)
         self.assertGreater(
             service._estimate_narration_duration_seconds(
                 result.narration,
@@ -232,6 +248,28 @@ class LLMServiceDurationTests(unittest.TestCase):
             ),
             payload.target_duration_seconds * service.MAX_DURATION_RATIO,
         )
+
+    def test_existing_candidate_is_returned_when_fallback_rejects_json(self) -> None:
+        client = InvalidFallbackAfterCandidateTextClient()
+        service = LLMService(
+            llm_client=client,
+            model="qwen/qwen3.6-27b",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-fallback-json",
+            project_id="project-fallback-json",
+            topic="The Mystery of the Laguna Copperplate Inscription",
+            target_duration_seconds=60,
+            speaking_rate=0.96,
+            script_framework="history_story",
+            story_format="mystery_reveal",
+        )
+
+        result = service.generate_story_script(payload)
+
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(result.narration, FAR_SHORT_NARRATION)
 
     def test_existing_candidate_is_returned_when_duration_repair_is_rate_limited(self) -> None:
         client = RateLimitedAfterCandidateTextClient()

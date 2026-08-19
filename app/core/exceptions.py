@@ -1,3 +1,6 @@
+from collections.abc import Mapping
+
+
 class AppError(Exception):
     def __init__(self, message: str, *, code: str = "app_error") -> None:
         super().__init__(message)
@@ -21,8 +24,28 @@ class IntegrationError(AppError):
 
 
 class ProviderRateLimitError(IntegrationError):
-    def __init__(self, message: str) -> None:
+    SAFE_RESPONSE_HEADERS = {
+        "retry-after",
+        "x-ratelimit-limit-requests",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-limit-tokens",
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset-tokens",
+    }
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        response_headers: Mapping[str, str] | None = None,
+    ) -> None:
         super().__init__(message, code="provider_rate_limit")
+        self.response_headers = {
+            key.lower(): str(value)
+            for key, value in (response_headers or {}).items()
+            if key.lower() in self.SAFE_RESPONSE_HEADERS
+        }
 
 
 class ContentSafetyError(IntegrationError):

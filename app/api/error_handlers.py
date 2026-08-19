@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, ProviderRateLimitError
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -15,6 +15,11 @@ def register_exception_handlers(app: FastAPI) -> None:
 
         return JSONResponse(
             status_code=status_code,
+            headers=(
+                exc.response_headers
+                if isinstance(exc, ProviderRateLimitError)
+                else None
+            ),
             content={
                 "error": {
                     "code": exc.code,

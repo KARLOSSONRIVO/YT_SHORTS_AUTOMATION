@@ -9,6 +9,9 @@ from PIL import Image
 from app.core.exceptions import ContentSafetyError, IntegrationError
 from app.schemas.faceless_video import FacelessScene, SceneImageGenerationRequest
 from app.services.image_service import ImageService
+from app.services.pollinations_image_generation_service import (
+    PollinationsImageGenerationService,
+)
 
 
 def png_bytes(*, color: str = "navy") -> bytes:
@@ -23,7 +26,7 @@ class ImageServiceTests(unittest.TestCase):
             ffmpeg_client=None,
             output_dir=output_dir,
             image_generation_service=SimpleNamespace(
-                model="@cf/black-forest-labs/flux-2-dev"
+                model="flux"
             ),
         )
 
@@ -47,7 +50,7 @@ class ImageServiceTests(unittest.TestCase):
 
     def test_cleanup_retry_failure_uses_last_valid_candidate(self) -> None:
         service = self.make_service("unused")
-        provider_failure = IntegrationError("Cloudflare returned status 400")
+        provider_failure = IntegrationError("Pollinations returned status 400")
 
         with (
             patch.object(
@@ -76,7 +79,7 @@ class ImageServiceTests(unittest.TestCase):
         with patch.object(
             service,
             "_generate_image",
-            side_effect=IntegrationError("Cloudflare authentication failed"),
+            side_effect=IntegrationError("Pollinations authentication failed"),
         ):
             with self.assertRaises(IntegrationError) as caught:
                 service._generate_clean_scene_image("scene prompt")
@@ -107,7 +110,7 @@ class ImageServiceTests(unittest.TestCase):
         def generate(prompt: str) -> bytes:
             prompts.append(prompt)
             if len(prompts) == 1:
-                raise ContentSafetyError("Cloudflare output was flagged")
+                raise ContentSafetyError("Pollinations output was flagged")
             return png_bytes(color="teal")
 
         with (
@@ -199,6 +202,21 @@ class ImageServiceTests(unittest.TestCase):
 
         self.assertEqual(scene_path.read_bytes(), replacement)
         generate.assert_called_once()
+
+    def test_generation_manifest_identifies_pollinations_as_the_only_provider(self) -> None:
+        service = self.make_service("unused")
+        service.image_generation_service = PollinationsImageGenerationService(
+            pollinations_client=SimpleNamespace(),
+            model="flux",
+            width=768,
+            height=1024,
+        )
+
+        manifest = service._generation_manifest("scene prompt")
+
+        self.assertEqual(manifest["provider"], "pollinations")
+        self.assertEqual(manifest["model"], "flux")
+        self.assertEqual(len(manifest["prompt_sha256"]), 64)
 
     def test_corrupt_existing_scene_is_regenerated(self) -> None:
         output_dir = Path.cwd()

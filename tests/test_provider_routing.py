@@ -20,7 +20,7 @@ class GroqSettingsTests(unittest.TestCase):
         self.assertEqual(settings.groq_model, "qwen/qwen3.6-27b")
         self.assertEqual(
             settings.groq_fallback_model,
-            "llama-3.1-8b-instant",
+            "openai/gpt-oss-20b",
         )
         self.assertEqual(
             settings.groq_base_url,
@@ -40,35 +40,38 @@ class GroqSettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.gemini_api_key, "gemini-env-key")
 
-    def test_settings_load_cloudflare_image_provider_defaults(self) -> None:
+    def test_settings_load_pollinations_primary_image_defaults(self) -> None:
         with patch.dict(
             os.environ,
-            {
-                "CLOUDFLARE_ACCOUNT_ID": "account-123",
-                "CLOUDFLARE_API_TOKEN": "cloudflare-token",
-            },
+            {"POLLINATIONS_API_KEY": "pollinations-env-key"},
             clear=True,
         ):
             settings = Settings(_env_file=None)
 
-        self.assertEqual(settings.cloudflare_account_id, "account-123")
-        self.assertEqual(settings.cloudflare_api_token, "cloudflare-token")
+        self.assertEqual(settings.pollinations_api_key, "pollinations-env-key")
+        self.assertEqual(settings.pollinations_image_model, "flux")
+        self.assertEqual(settings.pollinations_image_width, 768)
+        self.assertEqual(settings.pollinations_image_height, 1024)
         self.assertEqual(
-            settings.cloudflare_image_model,
-            "@cf/black-forest-labs/flux-2-klein-9b",
+            settings.pollinations_base_url,
+            "https://gen.pollinations.ai/v1",
         )
-        self.assertEqual(settings.cloudflare_image_width, 768)
-        self.assertEqual(settings.cloudflare_image_height, 1024)
-        self.assertEqual(settings.cloudflare_image_num_steps, 4)
-        self.assertEqual(settings.cloudflare_image_timeout_seconds, 300)
+        self.assertEqual(settings.pollinations_image_timeout_seconds, 300)
+        self.assertEqual(settings.pollinations_tts_model, "elevenlabs")
 
 
 class ProviderRoutingTests(unittest.TestCase):
     def tearDown(self) -> None:
         deps.get_groq_client.cache_clear()
         deps.get_llm_service.cache_clear()
-        deps.get_cloudflare_workers_ai_client.cache_clear()
-        deps.get_cloudflare_image_generation_service.cache_clear()
+        for dependency_name in (
+            "get_pollinations_client",
+            "get_pollinations_image_generation_service",
+        ):
+            dependency = getattr(deps, dependency_name, None)
+            if dependency is not None:
+                dependency.cache_clear()
+        deps.get_image_service.cache_clear()
         deps.get_tts_service.cache_clear()
 
     def test_llm_service_receives_groq_client_and_model(self) -> None:
@@ -104,7 +107,7 @@ class ProviderRoutingTests(unittest.TestCase):
         settings = SimpleNamespace(
             groq_api_key="groq-test-key",
             groq_base_url="https://api.groq.test/openai/v1",
-            groq_fallback_model="llama-3.1-8b-instant",
+            groq_fallback_model="openai/gpt-oss-20b",
             ai_timeout_seconds=30,
         )
         deps.get_groq_client.cache_clear()
@@ -119,69 +122,88 @@ class ProviderRoutingTests(unittest.TestCase):
             api_key="groq-test-key",
             base_url="https://api.groq.test/openai/v1",
             timeout_seconds=30,
-            fallback_model="llama-3.1-8b-instant",
+            fallback_model="openai/gpt-oss-20b",
         )
 
-    def test_cloudflare_client_receives_image_specific_timeout(self) -> None:
+    def test_pollinations_client_receives_configured_key_and_timeout(self) -> None:
         settings = SimpleNamespace(
-            cloudflare_account_id="account-123",
-            cloudflare_api_token="cloudflare-token",
-            cloudflare_base_url="https://api.cloudflare.test/client/v4/accounts",
-            cloudflare_image_timeout_seconds=300,
+            pollinations_api_key="pollinations-test-key",
+            pollinations_base_url="https://gen.pollinations.test/v1",
+            pollinations_image_timeout_seconds=180,
         )
-        deps.get_cloudflare_workers_ai_client.cache_clear()
-
-        with (
-            patch.object(deps, "get_settings", return_value=settings),
-            patch.object(deps, "CloudflareWorkersAIClient") as client_class,
-        ):
-            deps.get_cloudflare_workers_ai_client()
-
-        client_class.assert_called_once_with(
-            account_id="account-123",
-            api_token="cloudflare-token",
-            base_url="https://api.cloudflare.test/client/v4/accounts",
-            timeout_seconds=300,
-        )
-
-    def test_image_generation_service_receives_cloudflare_client_and_settings(self) -> None:
-        settings = SimpleNamespace(
-            cloudflare_image_model="@cf/black-forest-labs/flux-2-klein-9b",
-            cloudflare_image_width=1024,
-            cloudflare_image_height=1792,
-            cloudflare_image_num_steps=4,
-            cloudflare_image_guidance=7.5,
-        )
-        cloudflare_client = object()
-        deps.get_cloudflare_image_generation_service.cache_clear()
 
         with (
             patch.object(deps, "get_settings", return_value=settings),
             patch.object(
                 deps,
-                "get_cloudflare_workers_ai_client",
-                return_value=cloudflare_client,
+                "PollinationsClient",
+                create=True,
+            ) as client_class,
+        ):
+            deps.get_pollinations_client()
+
+        client_class.assert_called_once_with(
+            api_key="pollinations-test-key",
+            base_url="https://gen.pollinations.test/v1",
+            timeout_seconds=180,
+        )
+
+    def test_pollinations_image_service_receives_flux_and_vertical_dimensions(self) -> None:
+        settings = SimpleNamespace(
+            pollinations_image_model="flux",
+            pollinations_image_width=768,
+            pollinations_image_height=1024,
+        )
+        pollinations_client = object()
+
+        with (
+            patch.object(deps, "get_settings", return_value=settings),
+            patch.object(
+                deps,
+                "get_pollinations_client",
+                return_value=pollinations_client,
+                create=True,
             ),
         ):
-            service = deps.get_cloudflare_image_generation_service()
+            service = deps.get_pollinations_image_generation_service()
 
-        self.assertIs(service.cloudflare_client, cloudflare_client)
-        self.assertEqual(
-            service.model,
-            "@cf/black-forest-labs/flux-2-klein-9b",
+        self.assertIs(service.pollinations_client, pollinations_client)
+        self.assertEqual(service.model, "flux")
+        self.assertEqual(service.width, 768)
+        self.assertEqual(service.height, 1024)
+
+    def test_image_service_uses_pollinations_as_its_only_image_provider(self) -> None:
+        settings = SimpleNamespace(
+            output_dir="outputs",
+            allow_placeholder_generation=False,
         )
-        self.assertEqual(service.width, 1024)
-        self.assertEqual(service.height, 1792)
-        self.assertEqual(service.num_steps, 4)
-        self.assertEqual(service.guidance, 7.5)
+        pollinations_service = SimpleNamespace(model="flux")
+        ffmpeg_client = object()
 
-    def test_tts_service_still_receives_gemini_client(self) -> None:
+        with (
+            patch.object(deps, "get_settings", return_value=settings),
+            patch.object(deps, "get_ffmpeg_client", return_value=ffmpeg_client),
+            patch.object(
+                deps,
+                "get_pollinations_image_generation_service",
+                return_value=pollinations_service,
+                create=True,
+            ),
+        ):
+            service = deps.get_image_service()
+
+        self.assertIs(service.image_generation_service, pollinations_service)
+        self.assertEqual(service.image_generation_service.model, "flux")
+
+    def test_tts_service_receives_gemini_primary_and_pollinations_elevenlabs_fallback(self) -> None:
         settings = SimpleNamespace(
             output_dir="outputs",
             gemini_tts_model="gemini-tts-model",
+            pollinations_tts_model="elevenlabs",
             allow_placeholder_generation=False,
         )
         gemini_client = object()
+        pollinations_client = object()
         ffmpeg_client = object()
         deps.get_tts_service.cache_clear()
 
@@ -197,12 +219,19 @@ class ProviderRoutingTests(unittest.TestCase):
                 "get_ffmpeg_client",
                 return_value=ffmpeg_client,
             ),
+            patch.object(
+                deps,
+                "get_pollinations_client",
+                return_value=pollinations_client,
+            ),
         ):
             service = deps.get_tts_service()
 
         self.assertIs(service.gemini_client, gemini_client)
+        self.assertIs(service.pollinations_client, pollinations_client)
         self.assertIs(service.ffmpeg_client, ffmpeg_client)
         self.assertEqual(service.model, "gemini-tts-model")
+        self.assertEqual(service.fallback_model, "elevenlabs")
 
 
 if __name__ == "__main__":

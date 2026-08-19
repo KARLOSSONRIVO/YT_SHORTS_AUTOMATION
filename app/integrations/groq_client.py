@@ -68,8 +68,13 @@ class GroqClient:
                 headers=headers,
                 json=payload,
             )
+            primary_rate_limit_error = (
+                self._rate_limit_error(response)
+                if response.status_code == 429
+                else None
+            )
             if (
-                response.status_code == 429
+                primary_rate_limit_error is not None
                 and self.fallback_model
                 and self.fallback_model != model
             ):
@@ -83,11 +88,15 @@ class GroqClient:
                     headers=headers,
                     json=fallback_payload,
                 )
+                if response.status_code >= 400:
+                    raise primary_rate_limit_error
+                primary_rate_limit_error = None
+
+        if primary_rate_limit_error is not None:
+            raise primary_rate_limit_error
 
         if response.status_code >= 400:
             message = self._error_message(response)
-            if response.status_code == 429:
-                raise ProviderRateLimitError(message)
             raise IntegrationError(message)
 
         try:
@@ -101,6 +110,12 @@ class GroqClient:
         if not content:
             raise IntegrationError(f"Groq text API returned no text output: {body}")
         return content
+
+    def _rate_limit_error(self, response: httpx.Response) -> ProviderRateLimitError:
+        return ProviderRateLimitError(
+            self._error_message(response),
+            response_headers=response.headers,
+        )
 
     def _extract_content(self, body: Any) -> str | None:
         if not isinstance(body, dict):

@@ -3,7 +3,7 @@ import math
 import re
 from typing import Any
 
-from app.core.exceptions import IntegrationError, ProviderRateLimitError
+from app.core.exceptions import IntegrationError
 from app.schemas.faceless_video import (
     FacelessScene,
     ScriptGenerationRequest,
@@ -12,7 +12,8 @@ from app.schemas.faceless_video import (
 
 
 class LLMService:
-    SCRIPT_MAX_ATTEMPTS = 3
+    SCRIPT_MAX_ATTEMPTS = 2
+    SCRIPT_MAX_NEW_TOKENS = 1600
     MIN_DURATION_RATIO = 0.90
     MAX_DURATION_RATIO = 1.08
     ESTIMATED_WORDS_PER_SECOND = 2.15
@@ -46,14 +47,14 @@ class LLMService:
                             adjustment=adjustment,
                             previous_response=last_response,
                         ),
-                        max_new_tokens=2200,
+                        max_new_tokens=self.SCRIPT_MAX_NEW_TOKENS,
                         temperature=0.75,
                     )
-                except ProviderRateLimitError:
+                    candidate = self._parse_response(payload, generated)
+                except IntegrationError:
                     if best_response is not None:
                         return best_response
                     raise
-                candidate = self._parse_response(payload, generated)
                 estimated_duration = self._estimate_narration_duration_seconds(
                     candidate.narration,
                     payload.speaking_rate,

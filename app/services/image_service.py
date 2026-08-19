@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+from typing import Protocol
 
 from PIL import Image
 
@@ -13,10 +14,27 @@ from app.schemas.faceless_video import (
     SceneImageGenerationRequest,
     SceneImageGenerationResponse,
 )
-from app.services.cloudflare_image_generation_service import CloudflareImageGenerationService
 from app.utils.output_paths import output_url, stage_output_dir
 
 logger = logging.getLogger(__name__)
+
+
+class GeneratedImage(Protocol):
+    image_bytes: bytes
+    mime_type: str
+    provider: str
+    model: str
+
+
+class ImageGenerationProvider(Protocol):
+    model: str
+
+    def generate_image(
+        self,
+        *,
+        prompt: str,
+        negative_prompt: str | None = None,
+    ) -> GeneratedImage: ...
 
 
 class ImageService:
@@ -39,7 +57,7 @@ class ImageService:
         *,
         ffmpeg_client,
         output_dir: str,
-        image_generation_service: CloudflareImageGenerationService,
+        image_generation_service: ImageGenerationProvider,
         allow_placeholder_generation: bool = False,
     ) -> None:
         self.ffmpeg_client = ffmpeg_client
@@ -152,7 +170,7 @@ class ImageService:
                         raise
                     generation_prompt = self._content_safe_fallback_prompt(prompt)
                     logger.warning(
-                        "Cloudflare rejected a scene prompt through content safety filtering; "
+                        "The image provider rejected a scene prompt through content safety filtering; "
                         "retrying with a safe anonymous version of the same scene."
                     )
                     generated_image = self._generate_image(generation_prompt)
@@ -261,11 +279,23 @@ class ImageService:
         return output_path.with_suffix(".generation.json")
 
     def _generation_manifest(self, prompt: str) -> dict[str, str | int]:
-        model = str(getattr(self.image_generation_service, "model", "unknown"))
+        manifest_factory = getattr(
+            self.image_generation_service,
+            "generation_manifest",
+            None,
+        )
+        if callable(manifest_factory):
+            provider_identity = manifest_factory()
+        else:
+            provider_identity = {
+                "provider": "pollinations",
+                "model": str(
+                    getattr(self.image_generation_service, "model", "unknown")
+                ),
+            }
         return {
+            **provider_identity,
             "version": 1,
-            "provider": "cloudflare_workers_ai",
-            "model": model,
             "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         }
 
