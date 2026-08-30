@@ -20,6 +20,12 @@ services:
       PY_WORKER_UPLOAD_DIR: /app/uploads
       PY_WORKER_OUTPUT_DIR: /app/outputs
       PY_WORKER_AI_TIMEOUT_SECONDS: ${PY_WORKER_AI_TIMEOUT_SECONDS:-120}
+      # Parallel capacity: PY_WORKER_PROCESSES uvicorn processes, each running up
+      # to PY_WORKER_MAX_CONCURRENT_JOBS blocking jobs. Keep the product at or
+      # above AUTOMATION_MAX_CONCURRENT_PROJECTS on the Node side, or projects
+      # unblocked there just queue here instead.
+      PY_WORKER_PROCESSES: ${PY_WORKER_PROCESSES:-3}
+      PY_WORKER_MAX_CONCURRENT_JOBS: ${PY_WORKER_MAX_CONCURRENT_JOBS:-2}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       POLLINATIONS_API_KEY: ${POLLINATIONS_API_KEY:-}
       PY_WORKER_POLLINATIONS_IMAGE_MODEL: ${PY_WORKER_POLLINATIONS_IMAGE_MODEL:-flux}

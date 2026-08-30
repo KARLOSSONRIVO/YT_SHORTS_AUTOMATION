@@ -1,3 +1,4 @@
+import threading
 from typing import Any
 
 from app.core.exceptions import IntegrationError
@@ -7,6 +8,11 @@ class WhisperClient:
     def __init__(self, model_name: str = "base") -> None:
         self.model_name = model_name
         self._model = None
+        # Transcription now runs on worker threads (app.core.concurrency), and
+        # one cached client is shared by the transcription and subtitle
+        # services. Without this lock two concurrent first-calls both see
+        # _model as None and each load a full model into memory.
+        self._model_lock = threading.Lock()
 
     def is_available(self) -> bool:
         try:
@@ -19,15 +25,19 @@ class WhisperClient:
         if self._model is not None:
             return self._model
 
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError as exc:
-            raise IntegrationError(
-                "faster-whisper is not installed. Install the media extras to enable transcription."
-            ) from exc
+        with self._model_lock:
+            if self._model is not None:
+                return self._model
 
-        self._model = WhisperModel(self.model_name)
-        return self._model
+            try:
+                from faster_whisper import WhisperModel
+            except ImportError as exc:
+                raise IntegrationError(
+                    "faster-whisper is not installed. Install the media extras to enable transcription."
+                ) from exc
+
+            self._model = WhisperModel(self.model_name)
+            return self._model
 
     def transcribe(self, media_uri: str, language: str | None = None) -> dict:
         model = self._load_model()

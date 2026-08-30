@@ -7,6 +7,7 @@ from app.api.deps import (
     get_metadata_service,
     get_render_service,
 )
+from app.core.concurrency import run_blocking
 from app.schemas.analysis import ClipCandidate, ClipScoreBreakdown
 from app.schemas.subtitles import SubtitlePreferences
 from app.schemas.transcription import TranscriptResult
@@ -43,9 +44,10 @@ async def render_clip_upload(
 ) -> RenderedClipResult:
     media_uri = await media_store.save_upload(file)
     try:
-        media_metadata = metadata_service.read(media_uri)
+        media_metadata = await run_blocking(metadata_service.read, media_uri)
         transcript = TranscriptResult.model_validate(json.loads(transcript_json))
-        rendered = render_service.render_clips(
+        rendered = await run_blocking(
+            render_service.render_clips,
             media_uri=media_uri,
             job_id=job_id,
             project_id=project_id,

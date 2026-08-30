@@ -13,6 +13,7 @@ from app.api.deps import (
     get_story_render_service,
     get_tts_service,
 )
+from app.core.concurrency import run_blocking
 from app.schemas.faceless_video import (
     AudioGenerationRequest,
     AudioGenerationResponse,
@@ -50,7 +51,7 @@ async def generate_script(
     payload: ScriptGenerationRequest,
     llm_service: LLMService = Depends(get_llm_service),
 ) -> ScriptGenerationResponse:
-    return llm_service.generate_story_script(payload)
+    return await run_blocking(llm_service.generate_story_script, payload)
 
 
 @router.post("/generate-audio", response_model=AudioGenerationResponse)
@@ -58,7 +59,7 @@ async def generate_audio(
     payload: AudioGenerationRequest,
     tts_service: TTSService = Depends(get_tts_service),
 ) -> AudioGenerationResponse:
-    return tts_service.generate_narration(payload)
+    return await run_blocking(tts_service.generate_narration, payload)
 
 
 @router.post("/generate-subtitles", response_model=StorySubtitleGenerationResponse)
@@ -66,7 +67,7 @@ async def generate_subtitles(
     payload: StorySubtitleGenerationRequest,
     subtitle_service: FacelessSubtitleService = Depends(get_faceless_subtitle_service),
 ) -> StorySubtitleGenerationResponse:
-    return subtitle_service.generate_subtitles(payload)
+    return await run_blocking(subtitle_service.generate_subtitles, payload)
 
 
 @router.post("/generate-scenes", response_model=SceneImageGenerationResponse)
@@ -74,7 +75,7 @@ async def generate_scenes(
     payload: SceneImageGenerationRequest,
     image_service: ImageService = Depends(get_image_service),
 ) -> SceneImageGenerationResponse:
-    return image_service.generate_scene_images(payload)
+    return await run_blocking(image_service.generate_scene_images, payload)
 
 
 @router.post("/generate-animations", response_model=SceneAnimationGenerationResponse)
@@ -82,7 +83,7 @@ async def generate_animations(
     payload: SceneAnimationGenerationRequest,
     ai_animation_service: AIAnimationService = Depends(get_ai_animation_service),
 ) -> SceneAnimationGenerationResponse:
-    return ai_animation_service.generate_scene_animations(payload)
+    return await run_blocking(ai_animation_service.generate_scene_animations, payload)
 
 
 @router.post("/generate-ambience", response_model=SceneAmbienceGenerationResponse)
@@ -127,7 +128,7 @@ async def render_story(
     payload: StoryRenderRequest,
     render_service: StoryRenderService = Depends(get_story_render_service),
 ) -> StoryRenderResponse:
-    return render_service.render_story_video(payload)
+    return await run_blocking(render_service.render_story_video, payload)
 
 
 @router.post("/cleanup-project-output", response_model=ProjectOutputCleanupResponse)
@@ -143,11 +144,13 @@ async def cleanup_project_output(
         project_id=payload.project_id,
         output_bucket=payload.output_bucket,
     )
-    for output_root in output_roots:
-        if output_root.exists():
-            shutil.rmtree(output_root, ignore_errors=True)
+    def _remove_output_roots() -> bool:
+        for output_root in output_roots:
+            if output_root.exists():
+                shutil.rmtree(output_root, ignore_errors=True)
+        return all(not output_root.exists() for output_root in output_roots)
 
-    deleted = all(not output_root.exists() for output_root in output_roots)
+    deleted = await run_blocking(_remove_output_roots)
     return ProjectOutputCleanupResponse(project_id=payload.project_id, deleted=deleted)
 
 

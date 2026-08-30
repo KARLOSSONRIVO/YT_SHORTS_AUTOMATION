@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     default_music_volume: float = 0.15
     enable_audio_ducking: bool = True
     music_assets_path: str = "assets/music"
+
+    # Concurrency. Heavy pipeline work (ffmpeg, whisper, Pillow) is synchronous
+    # and runs off the event loop via app.core.concurrency.run_blocking. This
+    # caps how many such jobs a single worker process runs at once; total
+    # capacity is this value times the uvicorn worker count.
+    max_concurrent_jobs: int = 2
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="PY_WORKER_",

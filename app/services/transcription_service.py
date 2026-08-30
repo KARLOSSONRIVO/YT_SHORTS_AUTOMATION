@@ -1,3 +1,4 @@
+from app.core.concurrency import run_blocking
 from app.schemas.transcription import TranscriptResult, TranscriptSegment, TranscriptWord
 
 
@@ -6,7 +7,10 @@ class TranscriptionService:
         self.whisper_client = whisper_client
 
     async def transcribe(self, media_uri: str, language: str | None) -> TranscriptResult:
-        raw = self.whisper_client.transcribe(media_uri, language=language)
+        # This method is async, but faster-whisper is a synchronous native call
+        # that runs for minutes. Offload it so one transcription does not pin the
+        # event loop for every other request this process is serving.
+        raw = await run_blocking(self.whisper_client.transcribe, media_uri, language=language)
         segments = []
         for segment in raw["segments"]:
             segments.append(

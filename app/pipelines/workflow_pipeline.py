@@ -1,3 +1,4 @@
+from app.core.concurrency import run_blocking
 from app.schemas.analysis import AnalyzeRequest
 from app.schemas.workflow import ProcessVideoResponse
 
@@ -9,7 +10,8 @@ class WorkflowPipeline:
 
     async def run(self, req: AnalyzeRequest) -> ProcessVideoResponse:
         analysis = await self.highlight_pipeline.run(req)
-        rendered_clips = self.render_service.render_clips(
+        rendered_clips = await run_blocking(
+            self.render_service.render_clips,
             media_uri=req.media_uri,
             job_id=req.job_id,
             project_id=None,

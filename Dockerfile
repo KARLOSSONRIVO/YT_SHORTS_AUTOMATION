@@ -19,4 +19,8 @@ COPY pyproject.toml README.md ./
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so PY_WORKER_PROCESSES is expanded at start-up, with `exec` so
+# uvicorn replaces the shell and still receives SIGTERM on `docker stop`.
+# Each worker is a separate process with its own whisper model, so raise the
+# count against available RAM, not just CPU count.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${PY_WORKER_PROCESSES:-3}"]
