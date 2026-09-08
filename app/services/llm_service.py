@@ -3,7 +3,7 @@ import math
 import re
 from typing import Any
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, ValidationError
 from app.schemas.faceless_video import (
     FacelessScene,
     ScriptGenerationRequest,
@@ -19,6 +19,12 @@ class LLMService:
     ESTIMATED_WORDS_PER_SECOND = 2.15
     MAX_PSYCHOLOGY_HOOK_WORDS = 8
     MAX_HISTORY_HOOK_WORDS = 9
+    PSYCHOLOGY_NICHE_ID = "psychology"
+    PSYCHOLOGY_SERIES_PROMISE = "Follow PsychoVault for the psychology behind everyday behavior."
+    PHILIPPINE_HISTORY_NICHE_ID = "philippine_history"
+    PHILIPPINE_HISTORY_SERIES = "Hidden Philippine History"
+    PHILIPPINE_HISTORY_OUTRO_DURATION_SECONDS = 5.0
+    MIN_SCENE_DURATION_SECONDS = 1.0
 
     def __init__(
         self,
@@ -32,6 +38,8 @@ class LLMService:
         self.allow_placeholder_generation = allow_placeholder_generation
 
     def generate_story_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
+        if payload.script_framework == "reddit_story" and not (payload.source_text and payload.source_text.strip()):
+            raise ValidationError("Original Reddit submission text is required before generating a Reddit story.")
         try:
             last_response: ScriptGenerationResponse | None = None
             best_response: ScriptGenerationResponse | None = None
@@ -286,6 +294,14 @@ Approximate target spoken word count: {target_word_count}
 Visual style preset: {payload.style_preset}
 Audience: {payload.audience or "viewers who respond to blunt psychology truths"}
 
+Packaging strategy:
+- Build the story around a recognizable everyday behavior, relationship moment, emotion, decision, or body-language cue.
+- State the concrete personal consequence in the first sentence and first visual so the viewer knows why it matters.
+- Name the psychology concept after the hook; do not lead with academic terminology.
+- Prefer conversational Why/How titles that describe a specific behavior or consequence.
+- Do not use generic academic titles such as "Understanding...", "The Impact of...", "The Psychology of...", or "The ... Effect in Decision Making".
+- Use one concrete example, plain language, and a useful action without diagnosing the viewer.
+
 Beat formula to follow:
 1. Opening hook: use a short punchy line that creates curiosity without explaining the whole topic.
 2. Set up the conflict: explain the psychological pattern and why it matters personally.
@@ -295,7 +311,7 @@ Beat formula to follow:
 6. Breakdown: explain why the brain or mind behaves this way in simple emotional language.
 7. Wake-up slap: one line that feels confronting but useful.
 8. Solution: one specific mindset shift or action.
-9. Closing hook: a final emotional line that lingers, not a generic call to action.
+9. Closing hook: a final emotional line that lingers, followed by the continuing series promise.
 
 Rules:
 - Start directly with the spoken hook. Do NOT speak the title in the narration.
@@ -308,7 +324,7 @@ Rules:
 - The hook must land in the very first sentence.
 - The truth bomb should be emotionally sharp but not melodramatic.
 - The solution must be practical and specific.
-- The closing line should feel like a final mental punch.
+- The closing line should feel like a final mental punch, then end with: "{self.PSYCHOLOGY_SERIES_PROMISE}"
 - Make the full narration long enough to fill roughly {payload.target_duration_seconds} seconds of voice-over.
 - Every image prompt must describe one specific frozen visual moment with:
   - the main subject
@@ -333,7 +349,7 @@ Rules:
         retry_instruction: str,
     ) -> str:
         source_title = payload.project_title or payload.topic
-        source_text = payload.source_text or payload.topic
+        source_text = payload.source_text or ""
         return f"""
 You create a short-form dramatized retelling of a Reddit submission for YouTube Shorts and TikTok.
 Return only valid JSON. Do not wrap it in markdown.
@@ -371,7 +387,7 @@ Rules:
 - Do not turn this into history, war, politics, mythology, or a different unrelated story.
 - Do not invent historical names, dates, battles, countries, uniforms, or events.
 - Preserve the submission's central people, relationships, situation, and decision.
-- If the feed contains only a title, create a clearly dramatized fictional retelling of that title while keeping its premise unchanged.
+- Original Reddit submission text is required; never create a story from a title alone. If the text is missing, stop instead of inventing details.
 - Keep the title close to the Reddit submission title; never replace it with an unrelated title.
 - Do not claim the anonymous submission is independently verified.
 - Start directly with the spoken hook and create 6 to 8 scenes.
@@ -388,6 +404,31 @@ Rules:
         duration_instruction: str,
         retry_instruction: str,
     ) -> str:
+        philippine_history_rules = ""
+        if payload.niche_id == self.PHILIPPINE_HISTORY_NICHE_ID:
+            philippine_history_rules = f"""
+Philippine-history strategy:
+- Package the story around a recognizable object, place, artifact, event, or consequence that viewers understand immediately.
+- Make the unusual fact, mystery, conflict, or strong consequence clear in the first sentence and first visual.
+- Do not open with an unfamiliar person's name unless the first line also explains the event or impact that makes the person matter.
+- Avoid broad textbook framing such as 'The History of...' and generic 'Unraveling...' titles. Use a concrete reveal or consequence instead.
+- Use experiment variant: {payload.experiment_variant or "object_place_consequence"}.
+- For object_place_consequence, lead with an artifact, place, event, or historical consequence before naming less familiar people.
+- For person_impact, lead with the consequence or event, then introduce the person as the reason it happened.
+- Treat source URLs as verification metadata; never include or read URLs in the title, hook, narration, captions, or scene text.
+- End with a natural forward-looking promise for the {self.PHILIPPINE_HISTORY_SERIES} series. Do not use only a generic 'subscribe for more' request.
+""".strip()
+        next_story_instruction = ""
+        if payload.niche_id == self.PHILIPPINE_HISTORY_NICHE_ID and payload.next_story_title:
+            next_story_instruction = f"""
+Exact next scheduled story:
+- Title: {payload.next_story_title}
+- Topic: {payload.next_story_topic or payload.next_story_title}
+- End the historical story with a complete sentence in its own final story scene.
+- Add a separate final outro scene after that conclusion. Do not blend the teaser into the last historical scene.
+- The outro must name this exact next title or topic, then give a natural subscribe promise. Do not invent a different next story or use only a generic subscribe request.
+""".strip()
+        source_context = payload.source_text.strip() if payload.source_text and payload.source_text.strip() else "No verified research context was provided. Use only established facts from the topic."
         return f"""
 You generate retention-first faceless history shorts for YouTube Shorts and TikTok.
 Return only valid JSON. Do not wrap it in markdown.
@@ -418,6 +459,15 @@ Approximate target spoken word count: {target_word_count}
 {duration_instruction}
 Visual style preset: {payload.style_preset}
 Audience: {payload.audience or "viewers who enjoy dramatic history stories"}
+Niche id: {payload.niche_id or "general_history"}
+Experiment variant: {payload.experiment_variant or "none"}
+
+Verified research context:
+{source_context}
+
+{philippine_history_rules}
+
+{next_story_instruction}
 
 Beat formula to follow:
 Adapt the beats to the selected story format. Examples: record_breaking_moment = Hook, Context, Challenge, Record, Outcome, Twist; mystery/unsolved = Hook, Setting, Strange Event, Evidence, Main Theory, Unresolved Ending; rise_and_fall = Peak, Origin, Escalation, Fatal Choice, Collapse, Legacy.
@@ -434,13 +484,14 @@ Rules:
 - Keep the hook simple and direct. Do not summarize the full topic in the hook.
 - Do not repeat the title, project name, or full topic inside the hook.
 - Good hook examples: "History almost forgot this.", "One mistake changed everything.", "This should never have happened.", "An empire cracked here."
+- Make scene 1 a compelling close-up or immediate action, not a slow establishing shot.
 - Create 6 to 8 scenes.
 - Each scene should map naturally to one of the beats above.
 - Make the script sound like a smooth spoken short, not labeled sections.
 - The hook must land in the very first sentence.
 - Make the history vivid, concrete, and easy to follow without sounding like a textbook.
 - Focus on real people, pressure, consequences, and stakes.
-- The closing line should make the event feel meaningful or haunting.
+- The closing line should make the event feel meaningful or haunting. For Philippine history, keep the historical conclusion separate from the next-episode outro so the transition does not sound like an interruption.
 - Make the full narration long enough to fill roughly {payload.target_duration_seconds} seconds of voice-over.
 - Every image prompt must describe one specific frozen visual moment with:
   - the main subject
@@ -484,19 +535,27 @@ Rules:
         caption_text = str(data.get("caption_text") or hook).strip()
 
         if payload.script_framework == "history_story":
-            hook = self._normalize_history_hook(payload.topic, hook)
-            title = self._normalize_history_title(payload.topic, title)
+            hook = self._normalize_history_hook(payload.topic, hook, payload.niche_id)
+            title = self._normalize_history_title(payload.topic, title, payload.niche_id)
             scenes = self._ensure_psychology_scene_lead(hook, scenes)
-        else:
+        elif payload.script_framework == "psychology_truth":
             hook = self._normalize_psychology_hook(payload.topic, hook)
             title = self._normalize_psychology_title(payload.topic, title)
-            scenes = self._ensure_psychology_scene_lead(hook, scenes)
+            scenes = self._ensure_psychology_truth_scene_lead(hook, scenes)
+            if payload.niche_id == self.PSYCHOLOGY_NICHE_ID:
+                scenes = self._ensure_psychology_series_promise(scenes)
 
         scene_narration = " ".join(scene.narration for scene in scenes).strip()
-        normalized_top_level_narration = self._ensure_psychology_hook_lead(
-            hook,
-            top_level_narration or scene_narration,
+        normalized_top_level_narration = (
+            top_level_narration or scene_narration
+            if payload.script_framework == "reddit_story"
+            else self._ensure_psychology_hook_lead(hook, top_level_narration or scene_narration)
         )
+        if payload.script_framework == "history_story" and payload.niche_id == self.PHILIPPINE_HISTORY_NICHE_ID:
+            scenes = self._ensure_history_next_story_scene(payload, scenes)
+            scene_narration = " ".join(scene.narration for scene in scenes).strip()
+            if payload.next_story_title:
+                normalized_top_level_narration = scene_narration
         narration = self._select_narration_closest_to_target(
             payload,
             normalized_top_level_narration,
@@ -585,8 +644,17 @@ Rules:
         scene_count = min(max(round(payload.target_duration_seconds / 7), 6), 8)
         scene_duration = max(payload.target_duration_seconds / scene_count, 3)
 
-        title = topic or "The history they almost forgot"
-        hook = self._fallback_history_hook(topic)
+        title = self._normalize_history_title(topic, "", payload.niche_id)
+        hook = self._fallback_history_hook(topic, niche_id=payload.niche_id)
+        if payload.niche_id == self.PHILIPPINE_HISTORY_NICHE_ID and payload.next_story_title:
+            closing_beat = (
+                f"Next, we uncover {payload.next_story_title}. "
+                f"Subscribe for the next chapter of {self.PHILIPPINE_HISTORY_SERIES}."
+            )
+        elif payload.niche_id == self.PHILIPPINE_HISTORY_NICHE_ID:
+            closing_beat = f"Subscribe for the next chapter of {self.PHILIPPINE_HISTORY_SERIES}."
+        else:
+            closing_beat = "And once you see how it happened, it becomes impossible to pretend it could never happen again."
         beats = [
             hook,
             f"It started with {topic}, in a moment people thought they understood, but the real danger was only beginning.",
@@ -595,10 +663,14 @@ Rules:
             "What happened next stunned everyone watching, because the cost was bigger and faster than anyone expected.",
             "The fallout did not end in that moment. It kept spreading through the people, the place, and the future it touched.",
             "That is why history kept this story alive, not because it was ordinary, but because it exposed how fragile power and certainty really are.",
-            "And once you see how it happened, it becomes impossible to pretend it could never happen again.",
+            closing_beat,
         ]
         visuals = [
-            "single central figure in a tense historical moment, cinematic close-up, dramatic light",
+            (
+                "immediate close-up of the defining artifact, place, or decisive action, cinematic framing, dramatic light"
+                if payload.niche_id == self.PHILIPPINE_HISTORY_NICHE_ID
+                else "single central figure in a tense historical moment, cinematic close-up, dramatic light"
+            ),
             "wide period environment establishing where the event unfolds, believable architecture and clothing",
             "crowd tension, worried faces, rising pressure, grounded historical atmosphere",
             "the decisive action or mistake frozen at the critical instant, dynamic framing",
@@ -624,6 +696,8 @@ Rules:
                 )
             )
 
+        if payload.niche_id == self.PHILIPPINE_HISTORY_NICHE_ID and payload.next_story_title:
+            scenes = self._ensure_history_next_story_scene(payload, scenes)
         narration = " ".join(scene.narration for scene in scenes)
         return ScriptGenerationResponse(
             job_id=payload.job_id,
@@ -697,11 +771,22 @@ Rules:
         normalized_hook = re.sub(r"\s+", " ", hook).strip()
         if normalized_hook:
             first_sentence = re.split(r"(?<=[.!?])\s+", normalized_hook)[0].strip()
-            shortened = self._shorten_psychology_hook(first_sentence)
-            if shortened:
-                return shortened
+            if not self._is_generic_psychology_hook(first_sentence):
+                shortened = self._shorten_psychology_hook(first_sentence)
+                if shortened:
+                    return shortened
 
         return self._fallback_psychology_hook(topic)
+
+    def _is_generic_psychology_hook(self, hook: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9\s]", "", hook.lower()).strip()
+        return normalized in {
+            "stop thinking",
+            "start doing",
+            "stop thinking start doing",
+            "let me explain",
+            "the truth is",
+        }
 
     def _shorten_psychology_hook(self, hook: str) -> str:
         cleaned = re.sub(r"\s+", " ", hook).strip()
@@ -726,6 +811,16 @@ Rules:
 
     def _fallback_psychology_hook(self, topic: str) -> str:
         lowered = topic.lower()
+        if "anchoring" in lowered:
+            return "The first number controls you."
+        if any(token in lowered for token in ("body language", "facial expression", "nonverbal", "first impression")):
+            return "People judge you before you speak."
+        if any(token in lowered for token in ("emotion", "mood", "oxytocin", "social bond", "interaction")):
+            return "Your mood may not be yours."
+        if any(token in lowered for token in ("sleep", "memory", "hippocampus", "forgetting")):
+            return "Your brain is deleting memories."
+        if any(token in lowered for token in ("social pressure", "pressure")):
+            return "You change when everyone is watching."
         if any(token in lowered for token in ("ignore", "lose interest", "pull away", "rejection")):
             return "This is why it hurts."
         if "confidence" in lowered:
@@ -737,17 +832,17 @@ Rules:
 
         return "Your brain is lying again."
 
-    def _normalize_history_hook(self, topic: str, hook: str) -> str:
+    def _normalize_history_hook(self, topic: str, hook: str, niche_id: str | None = None) -> str:
         normalized_hook = re.sub(r"\s+", " ", hook).strip()
         if normalized_hook:
             first_sentence = re.split(r"(?<=[.!?])\s+", normalized_hook)[0].strip()
-            shortened = self._shorten_history_hook(first_sentence)
+            shortened = self._shorten_history_hook(first_sentence, niche_id=niche_id, topic=topic)
             if shortened:
                 return shortened
 
-        return self._fallback_history_hook(topic)
+        return self._fallback_history_hook(topic, niche_id=niche_id)
 
-    def _shorten_history_hook(self, hook: str) -> str:
+    def _shorten_history_hook(self, hook: str, *, niche_id: str | None = None, topic: str = "") -> str:
         cleaned = re.sub(r"\s+", " ", hook).strip()
         if not cleaned:
             return ""
@@ -755,6 +850,9 @@ Rules:
         words = cleaned.split()
         if len(words) <= self.MAX_HISTORY_HOOK_WORDS:
             return cleaned
+
+        if niche_id == self.PHILIPPINE_HISTORY_NICHE_ID:
+            return self._fallback_history_hook(topic, niche_id=niche_id)
 
         lowered = cleaned.lower()
         if any(token in lowered for token in ("empire", "kingdom", "dynasty", "rome", "throne")):
@@ -768,8 +866,18 @@ Rules:
 
         return "History almost forgot this."
 
-    def _fallback_history_hook(self, topic: str) -> str:
+    def _fallback_history_hook(self, topic: str, *, niche_id: str | None = None) -> str:
         lowered = topic.lower()
+        if niche_id == self.PHILIPPINE_HISTORY_NICHE_ID:
+            if any(token in lowered for token in ("artifact", "document", "inscription", "plate", "galleon")):
+                return "This artifact rewrote Philippine history."
+            if any(token in lowered for token in ("tondo", "namayan", "kingdom", "empire", "manila")):
+                return "Before Manila, this place thrived."
+            if any(token in lowered for token in ("revolt", "revolution", "battle", "war", "spanish rule")):
+                return "This revolt challenged Spanish rule."
+            if any(token in lowered for token in ("hero", "heroine", "bonifacio", "aguinaldo", "mabini", "alvarez")):
+                return "They tried to erase this Filipino."
+            return "This Philippine story changed everything."
         if any(token in lowered for token in ("empire", "kingdom", "dynasty", "rome", "throne")):
             return "An empire cracked here."
         if any(token in lowered for token in ("war", "battle", "siege", "army")):
@@ -781,17 +889,71 @@ Rules:
 
         return "History almost forgot this."
 
-    def _normalize_history_title(self, topic: str, title: str) -> str:
+    def _normalize_history_title(self, topic: str, title: str, niche_id: str | None = None) -> str:
         normalized = title.strip()
-        if normalized:
+        if normalized and not (
+            niche_id == self.PHILIPPINE_HISTORY_NICHE_ID
+            and self._is_generic_history_title(normalized)
+        ):
             return normalized
+        if niche_id == self.PHILIPPINE_HISTORY_NICHE_ID:
+            return self._fallback_philippine_history_title(topic)
         return topic.strip() or "The history they almost forgot"
+
+    def _is_generic_history_title(self, title: str) -> bool:
+        lowered = re.sub(r"\s+", " ", title.lower()).strip()
+        return lowered.startswith(("unraveling ", "uncovering ", "the history of ", "a history of "))
+
+    def _fallback_philippine_history_title(self, topic: str) -> str:
+        cleaned = re.sub(r"\s+", " ", topic).strip()
+        lowered = cleaned.lower()
+        if any(token in lowered for token in ("artifact", "document", "inscription", "plate", "galleon")):
+            return "The Artifact That Rewrote Philippine History"
+        if any(token in lowered for token in ("tondo", "namayan", "kingdom", "empire", "manila")):
+            return "Before Manila: The Kingdom History Forgot"
+        if any(token in lowered for token in ("revolt", "revolution", "battle", "war", "spanish rule")):
+            return "The Filipino Revolt That Challenged Spain"
+        return "The Philippine Story History Almost Forgot"
 
     def _normalize_psychology_title(self, topic: str, title: str) -> str:
         normalized = title.strip()
-        if normalized:
+        if normalized and not self._is_generic_psychology_title(normalized):
             return normalized
-        return f"The psychology behind {topic}".strip()
+        return self._fallback_psychology_title(topic)
+
+    def _is_generic_psychology_title(self, title: str) -> bool:
+        normalized = re.sub(r"\s+", " ", title).strip()
+        if re.match(r"^(understanding|the impact of|unlocking the secrets of|the psychology of|can\b)", normalized, re.IGNORECASE):
+            return True
+        if re.search(r"\b(effect|bias|hormone|hippocampus|phenomenon|curiosity gap|cue[- ]routine[- ]reward)\b", normalized, re.IGNORECASE):
+            return not re.match(r"^(why|how|the reason)\b", normalized, re.IGNORECASE)
+        return False
+
+    def _fallback_psychology_title(self, topic: str) -> str:
+        lowered = topic.lower()
+        if "anchoring" in lowered:
+            return "The First Number You Hear Controls Your Decision"
+        if any(token in lowered for token in ("body language", "facial expression", "nonverbal", "first impression")):
+            return "How Your Body Language Changes What People Think"
+        if any(token in lowered for token in ("sleep", "hippocampus", "memory", "forgetting", "impression")):
+            return "Why Your Brain Edits What You Remember"
+        if any(token in lowered for token in ("confirmation bias", "cognitive bias", "overconfidence", "decision making")):
+            return "Why Your Brain Defends Bad Decisions"
+        if any(token in lowered for token in ("emotion", "mood", "oxytocin", "social bond", "interaction")):
+            return "Why Other People's Moods Change Yours"
+        if any(token in lowered for token in ("habit", "dopamine", "routine", "cue")):
+            return "Why Your Brain Keeps Repeating Bad Habits"
+        if any(token in lowered for token in ("loss aversion", "losses", "losing")):
+            return "Why Losing Feels Worse Than Winning Feels Good"
+        if any(token in lowered for token in ("social pressure", "pressure")):
+            return "Why You Change When Everyone Is Watching"
+        if any(token in lowered for token in ("familiarity", "familiar")):
+            return "Why Familiar People Feel Safer"
+        if any(token in lowered for token in ("unfinished", "zeigarnik")):
+            return "Why Your Brain Can't Let Go of Unfinished Tasks"
+        if any(token in lowered for token in ("curiosity gap", "not knowing")):
+            return "Why Your Brain Can't Stop Chasing Answers"
+        return "Why Your Brain Keeps Doing This"
 
     def _ensure_psychology_hook_lead(self, hook: str, narration: str) -> str:
         cleaned_narration = narration.strip()
@@ -825,6 +987,195 @@ Rules:
             caption_text=hook,
         )
         return [updated_first_scene, *scenes[1:]]
+
+    def _ensure_psychology_truth_scene_lead(
+        self,
+        hook: str,
+        scenes: list[FacelessScene],
+    ) -> list[FacelessScene]:
+        if not scenes:
+            return scenes
+
+        first_scene = scenes[0]
+        if self._normalize_text(first_scene.narration).startswith(self._normalize_text(hook)):
+            return scenes
+
+        updated_first_scene = FacelessScene(
+            scene_index=first_scene.scene_index,
+            narration=f"{hook} {first_scene.narration}".strip(),
+            image_prompt=first_scene.image_prompt,
+            duration_seconds=first_scene.duration_seconds,
+            caption_text=hook,
+        )
+        return [updated_first_scene, *scenes[1:]]
+
+    def _ensure_psychology_series_promise(
+        self,
+        scenes: list[FacelessScene],
+    ) -> list[FacelessScene]:
+        if not scenes:
+            return scenes
+
+        last_scene = scenes[-1]
+        if self._normalize_text(self.PSYCHOLOGY_SERIES_PROMISE) in self._normalize_text(last_scene.narration):
+            return scenes
+
+        closing_narration = self._ensure_sentence_ending(last_scene.narration)
+        updated_last_scene = FacelessScene(
+            scene_index=last_scene.scene_index,
+            narration=f"{closing_narration} {self.PSYCHOLOGY_SERIES_PROMISE}",
+            image_prompt=last_scene.image_prompt,
+            duration_seconds=last_scene.duration_seconds,
+            caption_text=self.PSYCHOLOGY_SERIES_PROMISE,
+        )
+        return [*scenes[:-1], updated_last_scene]
+
+    def _ensure_history_next_story_scene(
+        self,
+        payload: ScriptGenerationRequest,
+        scenes: list[FacelessScene],
+    ) -> list[FacelessScene]:
+        if payload.niche_id != self.PHILIPPINE_HISTORY_NICHE_ID or not payload.next_story_title or not scenes:
+            return scenes
+
+        story_scenes = list(scenes)
+        if len(story_scenes) > 1 and self._is_history_outro_scene(story_scenes[-1], payload):
+            story_scenes.pop()
+
+        last_story_scene = story_scenes[-1]
+        story_narration = self._remove_history_next_story_teaser(
+            payload,
+            last_story_scene.narration,
+        )
+        if not story_narration:
+            story_narration = "The story's legacy still endures."
+        updated_last_story_scene = FacelessScene(
+            scene_index=last_story_scene.scene_index,
+            narration=self._ensure_sentence_ending(story_narration),
+            image_prompt=last_story_scene.image_prompt,
+            duration_seconds=last_story_scene.duration_seconds,
+            caption_text=last_story_scene.caption_text,
+        )
+        story_scenes[-1] = updated_last_story_scene
+
+        original_total_duration = sum(
+            max(scene.duration_seconds, self.MIN_SCENE_DURATION_SECONDS)
+            for scene in scenes
+        )
+        outro_duration = self.PHILIPPINE_HISTORY_OUTRO_DURATION_SECONDS
+        total_duration = max(
+            original_total_duration,
+            len(story_scenes) * self.MIN_SCENE_DURATION_SECONDS + outro_duration,
+        )
+        story_duration_target = total_duration - outro_duration
+        story_duration = sum(
+            max(scene.duration_seconds, self.MIN_SCENE_DURATION_SECONDS)
+            for scene in story_scenes
+        )
+        scale = story_duration_target / story_duration if story_duration else 1.0
+        rebalanced_story_scenes: list[FacelessScene] = []
+        for scene in story_scenes:
+            rebalanced_story_scenes.append(
+                FacelessScene(
+                    scene_index=scene.scene_index,
+                    narration=scene.narration,
+                    image_prompt=scene.image_prompt,
+                    duration_seconds=max(
+                        round(
+                            max(scene.duration_seconds, self.MIN_SCENE_DURATION_SECONDS) * scale,
+                            2,
+                        ),
+                        self.MIN_SCENE_DURATION_SECONDS,
+                    ),
+                    caption_text=scene.caption_text,
+                )
+            )
+
+        duration_correction = round(
+            story_duration_target
+            - sum(scene.duration_seconds for scene in rebalanced_story_scenes),
+            2,
+        )
+        if rebalanced_story_scenes:
+            final_story_scene = rebalanced_story_scenes[-1]
+            rebalanced_story_scenes[-1] = FacelessScene(
+                scene_index=final_story_scene.scene_index,
+                narration=final_story_scene.narration,
+                image_prompt=final_story_scene.image_prompt,
+                duration_seconds=max(
+                    round(final_story_scene.duration_seconds + duration_correction, 2),
+                    self.MIN_SCENE_DURATION_SECONDS,
+                ),
+                caption_text=final_story_scene.caption_text,
+            )
+
+        next_topic = (payload.next_story_topic or payload.next_story_title).strip()
+        outro_scene = FacelessScene(
+            scene_index=max(scene.scene_index for scene in story_scenes) + 1,
+            narration=self._history_next_story_outro(payload),
+            image_prompt=(
+                "dedicated closing visual for a Philippine history Shorts series, "
+                f"previewing the next story about {next_topic}, one iconic historical "
+                "subject centered in a cinematic vertical frame, darker edges and clean "
+                "negative space for the closing caption, smooth visual separation from "
+                "the story, no text, no logos"
+            ),
+            duration_seconds=outro_duration,
+            caption_text=f"NEXT: {next_topic}",
+        )
+        return [*rebalanced_story_scenes, outro_scene]
+
+    def _history_next_story_outro(self, payload: ScriptGenerationRequest) -> str:
+        next_title = (payload.next_story_title or "").strip().rstrip(".!?")
+        return (
+            f"Next: {next_title}. Subscribe for the next chapter of "
+            f"{self.PHILIPPINE_HISTORY_SERIES}."
+        )
+
+    def _is_history_outro_scene(
+        self,
+        scene: FacelessScene,
+        payload: ScriptGenerationRequest,
+    ) -> bool:
+        next_title = (payload.next_story_title or "").strip()
+        if not next_title or self._normalize_text(next_title) not in self._normalize_text(scene.narration):
+            return False
+        caption = self._normalize_text(scene.caption_text)
+        image_prompt = self._normalize_text(scene.image_prompt)
+        return caption.startswith("next") or "dedicated closing visual" in image_prompt
+
+    def _remove_history_next_story_teaser(
+        self,
+        payload: ScriptGenerationRequest,
+        narration: str,
+    ) -> str:
+        cleaned_narration = re.sub(r"\s+", " ", narration.strip())
+        next_title = (payload.next_story_title or "").strip()
+        if not next_title or self._normalize_text(next_title) not in self._normalize_text(cleaned_narration):
+            return cleaned_narration
+
+        escaped_title = re.escape(next_title)
+        teaser_patterns = (
+            rf"\s*(?:next|up next)\s*(?:,|:)?\s*"
+            rf"(?:(?:we|we'll|we will)\s+(?:uncover|explore)\s+)?"
+            rf"{escaped_title}.*$",
+            rf"\s*{escaped_title}.*$",
+        )
+        for pattern in teaser_patterns:
+            stripped = re.sub(pattern, "", cleaned_narration, flags=re.IGNORECASE).strip()
+            if stripped != cleaned_narration:
+                return stripped.rstrip(" ,:;-.")
+
+        marker = re.search(r"\b(?:next|up next)\b", cleaned_narration, flags=re.IGNORECASE)
+        if marker and self._normalize_text(next_title) in self._normalize_text(cleaned_narration[marker.start() :]):
+            return cleaned_narration[: marker.start()].rstrip(" ,:;-.")
+        return cleaned_narration
+
+    def _ensure_sentence_ending(self, narration: str) -> str:
+        cleaned_narration = narration.strip()
+        if cleaned_narration and cleaned_narration[-1] not in ".!?":
+            return f"{cleaned_narration}."
+        return cleaned_narration
 
     def _normalize_text(self, value: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s']+", " ", value.lower())).strip()

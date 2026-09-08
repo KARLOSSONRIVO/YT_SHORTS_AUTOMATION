@@ -10,6 +10,7 @@ from app.core.exceptions import IntegrationError, ProviderRateLimitError
 
 class GroqClient:
     QWEN_NON_REASONING_MODELS = {"qwen/qwen3.6-27b"}
+    QWEN_MAX_OUTPUT_TOKENS = 1000
 
     def __init__(
         self,
@@ -50,7 +51,11 @@ class GroqClient:
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
-            "max_completion_tokens": max_new_tokens,
+            "max_completion_tokens": (
+                min(max_new_tokens, self.QWEN_MAX_OUTPUT_TOKENS)
+                if model in self.QWEN_NON_REASONING_MODELS
+                else max_new_tokens
+            ),
             "response_format": {"type": "json_object"},
         }
         if model in self.QWEN_NON_REASONING_MODELS:

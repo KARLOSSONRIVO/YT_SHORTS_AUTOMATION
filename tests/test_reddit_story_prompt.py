@@ -1,5 +1,8 @@
 import json
 
+import pytest
+
+from app.core.exceptions import ValidationError
 from app.schemas.faceless_video import ScriptGenerationRequest
 from app.services.llm_service import LLMService
 
@@ -36,3 +39,20 @@ def test_reddit_story_prompt_includes_source_and_blocks_historical_substitution(
 
     assert "I slept with my ex’s best friend" in captured["prompt"]
     assert "Do not turn this into history" in captured["prompt"]
+    assert "Original Reddit submission text is required" in captured["prompt"]
+
+
+def test_reddit_story_rejects_missing_original_submission_text():
+    class Client:
+        def generate_text(self, **kwargs):
+            raise AssertionError("The model must not be called without source text")
+
+    payload = ScriptGenerationRequest(
+        job_id="job-2",
+        project_id="project-2",
+        topic="Reddit submission from r/confession",
+        script_framework="reddit_story",
+    )
+
+    with pytest.raises(ValidationError, match="Original Reddit submission text"):
+        LLMService(llm_client=Client(), model="test").generate_story_script(payload)

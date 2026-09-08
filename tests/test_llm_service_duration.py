@@ -2,7 +2,7 @@ import json
 import unittest
 
 from app.core.exceptions import IntegrationError, ProviderRateLimitError
-from app.schemas.faceless_video import ScriptGenerationRequest
+from app.schemas.faceless_video import FacelessScene, ScriptGenerationRequest
 from app.services.llm_service import LLMService
 
 
@@ -158,7 +158,203 @@ class InvalidFallbackAfterCandidateTextClient:
         )
 
 
+class PromptCaptureTextClient:
+    def __init__(self) -> None:
+        self.prompt = ""
+
+    def generate_text(self, **kwargs) -> str:
+        self.prompt = kwargs["prompt"]
+        return script_response(VALID_NARRATION)
+
+
 class LLMServiceDurationTests(unittest.TestCase):
+    def test_psychology_rewrites_academic_packaging_and_preserves_the_opening_setup(self) -> None:
+        service = LLMService(
+            llm_client=PromptCaptureTextClient(),
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-psychology-packaging",
+            project_id="project-psychology-packaging",
+            topic="The Anchoring Effect in Decision Making",
+            target_duration_seconds=45,
+            script_framework="psychology_truth",
+            story_format="one_decision_changed_everything",
+            niche_id="psychology",
+        )
+        generated = json.loads(script_response(VALID_NARRATION))
+        generated["title"] = "The Anchoring Effect in Decision Making"
+        generated["hook"] = "Stop thinking. Start doing."
+        generated["scenes"][0]["narration"] = "People often let the first number control what feels reasonable."
+
+        response = service._parse_response(payload, json.dumps(generated))
+
+        self.assertEqual(response.title, "The First Number You Hear Controls Your Decision")
+        self.assertEqual(response.hook, "The first number controls you.")
+        self.assertTrue(response.scenes[0].narration.startswith(response.hook))
+        self.assertIn("People often let the first number control", response.scenes[0].narration)
+        self.assertIn(LLMService.PSYCHOLOGY_SERIES_PROMISE, response.scenes[-1].narration)
+
+    def test_psychology_prompt_contains_everyday_behavior_and_series_rules(self) -> None:
+        client = PromptCaptureTextClient()
+        service = LLMService(
+            llm_client=client,
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-psychology-prompt",
+            project_id="project-psychology-prompt",
+            topic="Why people copy the mood of the person beside them",
+            target_duration_seconds=45,
+            script_framework="psychology_truth",
+            story_format="psychological_explanation",
+            niche_id="psychology",
+        )
+
+        service.generate_story_script(payload)
+
+        self.assertIn("recognizable everyday behavior", client.prompt)
+        self.assertIn("concrete personal consequence", client.prompt)
+        self.assertIn("Name the psychology concept after the hook", client.prompt)
+        self.assertIn("Follow PsychoVault for the psychology behind everyday behavior.", client.prompt)
+
+    def test_reddit_response_does_not_receive_psychology_hook_normalization(self) -> None:
+        service = LLMService(
+            llm_client=PromptCaptureTextClient(),
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-reddit-isolation",
+            project_id="project-reddit-isolation",
+            topic="A Reddit confession",
+            source_text="I made one mistake at the party and everyone found out tonight.",
+            target_duration_seconds=45,
+            script_framework="reddit_story",
+            niche_id=None,
+        )
+        generated = json.loads(script_response(VALID_NARRATION))
+        generated["title"] = "A Reddit confession"
+        generated["hook"] = "I made one mistake at the party and everyone found out tonight."
+        generated["scenes"][0]["narration"] = "The full Reddit opening explains what happened before the confession."
+
+        response = service._parse_response(payload, json.dumps(generated))
+
+        self.assertEqual(response.hook, generated["hook"])
+        self.assertEqual(response.scenes[0].narration, generated["scenes"][0]["narration"])
+
+    def test_philippine_history_outro_names_the_exact_next_story(self) -> None:
+        client = PromptCaptureTextClient()
+        service = LLMService(
+            llm_client=client,
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-next-story",
+            project_id="project-next-story",
+            topic="The Laguna Copperplate Inscription",
+            source_text="Verified summary: a dated copperplate inscription connected to the Philippines.",
+            target_duration_seconds=50,
+            speaking_rate=0.96,
+            script_framework="history_story",
+            story_format="hidden_history",
+            niche_id="philippine_history",
+            next_story_title="Before Manila: The Kingdom History Forgot",
+            next_story_topic="The Kingdom That Existed Before Manila",
+        )
+
+        response = service.generate_story_script(payload)
+
+        self.assertIn(payload.next_story_title, response.narration)
+        self.assertEqual(len(response.scenes), 7)
+        self.assertNotIn(payload.next_story_title, response.scenes[-2].narration)
+        self.assertIn(f"Next: {payload.next_story_title}.", response.scenes[-1].narration)
+        self.assertIn("Subscribe for the next chapter of Hidden Philippine History.", response.scenes[-1].narration)
+        self.assertEqual(response.scenes[-1].caption_text, "NEXT: The Kingdom That Existed Before Manila")
+        self.assertIn("dedicated closing visual", response.scenes[-1].image_prompt)
+        self.assertTrue(response.scenes[-2].narration.rstrip().endswith((".", "!", "?")))
+        self.assertAlmostEqual(sum(scene.duration_seconds for scene in response.scenes), 60.0, places=2)
+        self.assertEqual(response.narration, " ".join(scene.narration for scene in response.scenes))
+
+    def test_philippine_history_moves_an_existing_teaser_into_the_outro_scene(self) -> None:
+        service = LLMService(
+            llm_client=PromptCaptureTextClient(),
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-existing-teaser",
+            project_id="project-existing-teaser",
+            topic="The Sulu Sultanate",
+            target_duration_seconds=50,
+            script_framework="history_story",
+            story_format="hidden_history",
+            niche_id="philippine_history",
+            next_story_title="The Treasure Ship that Shaped Philippine History",
+            next_story_topic="The Manila Galleon",
+        )
+        scenes = [
+            FacelessScene(
+                scene_index=1,
+                narration="The sultanate ruled the seas.",
+                image_prompt="historical scene",
+                duration_seconds=7,
+                caption_text="The sultanate ruled the seas.",
+            ),
+            FacelessScene(
+                scene_index=2,
+                narration=(
+                    "Its legacy still echoes in Mindanao. Next, we uncover "
+                    "The Treasure Ship that Shaped Philippine History."
+                ),
+                image_prompt="legacy scene",
+                duration_seconds=7,
+                caption_text="A legacy that endures",
+            ),
+        ]
+
+        result = service._ensure_history_next_story_scene(payload, scenes)
+
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[-2].narration, "Its legacy still echoes in Mindanao.")
+        self.assertNotIn(payload.next_story_title, result[-2].narration)
+        self.assertIn(payload.next_story_title, result[-1].narration)
+        self.assertIn(payload.next_story_topic, result[-1].caption_text)
+
+    def test_philippine_history_prompt_contains_retention_and_series_rules(self) -> None:
+        client = PromptCaptureTextClient()
+        service = LLMService(
+            llm_client=client,
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-philippine-history",
+            project_id="project-philippine-history",
+            topic="The Laguna Copperplate Inscription",
+            source_text="Verified summary: a dated copperplate inscription connected to the Philippines. Sources: https://example.org/source",
+            target_duration_seconds=50,
+            speaking_rate=0.96,
+            script_framework="history_story",
+            story_format="hidden_history",
+            niche_id="philippine_history",
+            experiment_variant="object_place_consequence",
+        )
+
+        service.generate_story_script(payload)
+
+        self.assertIn("Philippine-history strategy", client.prompt)
+        self.assertIn("recognizable object, place, artifact, event, or consequence", client.prompt)
+        self.assertIn("strong consequence", client.prompt)
+        self.assertIn("Do not open with an unfamiliar person's name", client.prompt)
+        self.assertIn("Hidden Philippine History", client.prompt)
+        self.assertIn("object_place_consequence", client.prompt)
+        self.assertIn("Verified research context", client.prompt)
+        self.assertIn("Treat source URLs as verification metadata", client.prompt)
+
     def test_short_history_script_is_repaired_with_measured_duration_feedback(self) -> None:
         service = LLMService(
             llm_client=FeedbackAwareTextClient(),

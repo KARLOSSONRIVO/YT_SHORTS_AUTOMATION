@@ -20,6 +20,10 @@ class ScriptGenerationRequest(BaseModel):
     target_duration_seconds: int = Field(default=60, ge=15, le=180)
     style_preset: str = "cinematic documentary"
     audience: str | None = None
+    niche_id: str | None = None
+    experiment_variant: str | None = None
+    next_story_title: str | None = None
+    next_story_topic: str | None = None
     script_framework: str = "psychology_truth"
     story_format: str | None = None
     speaking_rate: float = Field(default=1.0, ge=0.5, le=2.0)
