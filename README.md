@@ -25,17 +25,16 @@ uvicorn app.main:app --reload
 
 ## AI providers
 
-Story scripts use Groq. Scene images use Pollinations `flux` directly.
+Story scripts use Pollinations `openai/gpt-5.6-luna`. Scene images use
+Pollinations `flux` directly.
 Narration speech uses Gemini with Pollinations `elevenlabs` (ElevenLabs v3)
 only when Gemini returns HTTP 429.
 
 Set these values in `.env`:
 
 ```text
-GROQ_API_KEY=your-groq-api-key
-GROQ_MODEL=qwen/qwen3.6-27b
-GROQ_FALLBACK_MODEL=openai/gpt-oss-20b
 POLLINATIONS_API_KEY=your-pollinations-secret-key
+PY_WORKER_POLLINATIONS_TEXT_MODEL=openai/gpt-5.6-luna
 PY_WORKER_POLLINATIONS_IMAGE_MODEL=flux
 PY_WORKER_POLLINATIONS_IMAGE_WIDTH=768
 PY_WORKER_POLLINATIONS_IMAGE_HEIGHT=1024
@@ -55,10 +54,10 @@ rate, deterministic seed, and reference-matched loudness processing are kept.
 Other Gemini errors do not trigger this fallback. Pollinations currently marks
 ElevenLabs v3 as paid-only, so it requires paid Pollen.
 
-`GROQ_MODEL` defaults to `qwen/qwen3.6-27b`. When that model returns HTTP 429,
-the worker retries the same request once with `GROQ_FALLBACK_MODEL`, which
-defaults to `openai/gpt-oss-20b`. Other errors do not trigger the fallback,
-and script generation never falls back to Gemini.
+The worker sends story JSON requests to Pollinations' OpenAI-compatible
+`/chat/completions` endpoint using the configured text model. The legacy Groq
+client remains available for older configurations but is no longer selected
+for Python-worker story generation.
 
 ## Docker
 

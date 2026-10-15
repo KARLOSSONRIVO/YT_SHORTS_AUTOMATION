@@ -10,10 +10,15 @@ def tokenize_text(text: str) -> list[str]:
 
 
 def summarize_excerpt(text: str, max_words: int = 8) -> str:
-    words = tokenize_text(text)
+    clean = compact_whitespace(text)
+    if not clean:
+        return "Candidate Clip"
+
+    sentence = re.split(r"(?<=[.!?])\s+", clean, maxsplit=1)[0].rstrip(".!?").strip()
+    words = tokenize_text(sentence or clean)
     if not words:
-        return "Candidate clip"
-    return " ".join(words[:max_words]).title()
+        return "Candidate Clip"
+    return " ".join(word[:1].upper() + word[1:].lower() for word in words[:max_words])
 
 
 def split_caption_lines(text: str, max_chars_per_line: int, max_lines: int) -> str:

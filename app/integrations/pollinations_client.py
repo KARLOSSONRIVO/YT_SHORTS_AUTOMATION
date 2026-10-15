@@ -36,6 +36,85 @@ class PollinationsClient:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
+    def generate_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        max_new_tokens: int = 1600,
+        temperature: float = 0.7,
+    ) -> str:
+        if not self.api_key:
+            raise IntegrationError(
+                "POLLINATIONS_API_KEY is required for Pollinations story generation."
+            )
+        if not model.strip():
+            raise IntegrationError(
+                "POLLINATIONS_TEXT_MODEL is required for Pollinations story generation."
+            )
+        if not prompt.strip():
+            raise IntegrationError(
+                "A story prompt is required for Pollinations text generation."
+            )
+
+        payload = {
+            "model": model.strip(),
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_completion_tokens": max_new_tokens,
+            "response_format": {"type": "json_object"},
+        }
+        endpoint = f"{self.base_url}/chat/completions"
+
+        try:
+            with httpx.Client(
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response = client.post(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+        except httpx.RequestError as exc:
+            raise IntegrationError(
+                f"Pollinations text generation request failed: {exc}"
+            ) from exc
+
+        if response.status_code >= 400:
+            message = self._error_message(response, operation="text generation")
+            logger.error(
+                "Pollinations text generation failed. model=%s status=%s message=%s",
+                model,
+                response.status_code,
+                message,
+            )
+            if response.status_code == 429:
+                raise ProviderRateLimitError(
+                    message,
+                    response_headers=response.headers,
+                )
+            if response.status_code == 402:
+                raise PaymentRequiredError(message)
+            raise IntegrationError(message)
+
+        try:
+            body = response.json()
+        except json.JSONDecodeError as exc:
+            raise IntegrationError(
+                "Pollinations text generation returned a non-JSON response."
+            ) from exc
+
+        content = self._extract_content(body)
+        if not content:
+            raise IntegrationError(
+                "Pollinations text generation returned no text output."
+            )
+        return content
+
     def generate_image(
         self,
         *,
@@ -212,6 +291,24 @@ class PollinationsClient:
             return None
         encoded = data[0].get("b64_json")
         return encoded if isinstance(encoded, str) else None
+
+    @staticmethod
+    def _extract_content(body: Any) -> str | None:
+        if not isinstance(body, dict):
+            return None
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        first = choices[0]
+        if not isinstance(first, dict):
+            return None
+        message = first.get("message")
+        if not isinstance(message, dict):
+            return None
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+        return None
 
     @staticmethod
     def _error_message(

@@ -355,6 +355,78 @@ class LLMServiceDurationTests(unittest.TestCase):
         self.assertIn("Verified research context", client.prompt)
         self.assertIn("Treat source URLs as verification metadata", client.prompt)
 
+    def test_serialized_story_prompt_and_non_final_outro_use_the_exact_next_episode(self) -> None:
+        client = PromptCaptureTextClient()
+        service = LLMService(
+            llm_client=client,
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-serialized-story",
+            project_id="project-serialized-story",
+            topic="The Room That Was Never Built",
+            target_duration_seconds=60,
+            script_framework="serialized_story",
+            niche_id="original_serialized_mystery",
+            serialized_story={
+                "series_number": 1,
+                "episode_number": 1,
+                "episodes_per_series": 3,
+                "series_title": "The House Beneath the Rain",
+                "premise": "A missing-person mystery follows a voice heard through sealed walls.",
+                "setting": "A flooded hillside town",
+                "character_notes": "Mara, a skeptical archivist",
+                "episode_objective": "Find the source of the voice",
+                "episode_summary": "Mara discovers the house was built over a buried listening room.",
+                "next_episode_title": "The Room That Was Never Built",
+                "next_episode_topic": "A hidden room appears on a blueprint that should not exist.",
+                "next_episode_promise": "the blueprint points to a room beneath the town",
+            },
+        )
+
+        response = service.generate_story_script(payload)
+
+        self.assertIn("original fictional", client.prompt.lower())
+        self.assertIn("episode 1 of 3", client.prompt.lower())
+        self.assertIn("The Room That Was Never Built", response.narration)
+        self.assertIn("Like and subscribe to see what happens next.", response.scenes[-1].narration)
+        self.assertEqual(len(response.scenes), 7)
+        self.assertAlmostEqual(sum(scene.duration_seconds for scene in response.scenes), 60.0, places=2)
+
+    def test_serialized_story_final_outro_does_not_tease_another_episode(self) -> None:
+        service = LLMService(
+            llm_client=PromptCaptureTextClient(),
+            model="llama-3.3-70b-versatile",
+            allow_placeholder_generation=False,
+        )
+        payload = ScriptGenerationRequest(
+            job_id="job-serialized-final",
+            project_id="project-serialized-final",
+            topic="The Last Door",
+            target_duration_seconds=60,
+            script_framework="serialized_story",
+            niche_id="original_serialized_mystery",
+            serialized_story={
+                "series_number": 1,
+                "episode_number": 3,
+                "episodes_per_series": 3,
+                "series_title": "The House Beneath the Rain",
+                "premise": "A missing-person mystery follows a voice heard through sealed walls.",
+                "setting": "A flooded hillside town",
+                "character_notes": "Mara, a skeptical archivist",
+                "episode_objective": "Open the last door",
+                "episode_summary": "Mara learns why the town erased the house from every map.",
+            },
+        )
+
+        response = service.generate_story_script(payload)
+
+        self.assertIn("Like and subscribe for more stories like this.", response.scenes[-1].narration)
+        self.assertNotIn("next episode", response.scenes[-1].narration.lower())
+        self.assertNotIn("see what happens next", response.scenes[-1].narration.lower())
+        self.assertEqual(response.scenes[-1].caption_text, "LIKE & SUBSCRIBE FOR MORE")
+
     def test_short_history_script_is_repaired_with_measured_duration_feedback(self) -> None:
         service = LLMService(
             llm_client=FeedbackAwareTextClient(),

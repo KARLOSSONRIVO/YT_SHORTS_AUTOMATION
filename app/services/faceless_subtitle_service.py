@@ -11,6 +11,7 @@ from app.schemas.faceless_video import (
     StorySubtitleGenerationResponse,
     SubtitleCue,
 )
+from app.utils.subtitle_fonts import resolve_render_font_family
 from app.utils.output_paths import output_url, stage_output_dir
 
 
@@ -424,7 +425,7 @@ class FacelessSubtitleService:
         return "\n".join(lines)
 
     def _ass_style_line(self, payload: StorySubtitleGenerationRequest) -> str:
-        font_name = payload.font_family or "Montserrat ExtraBold"
+        font_name = resolve_render_font_family(payload.font_family)
         font_size = payload.font_size or 64
         primary_color = self._hex_to_ass_color(payload.fill_color or "#FFFFFF")
         outline_color = self._hex_to_ass_color(payload.stroke_color or "#000000")

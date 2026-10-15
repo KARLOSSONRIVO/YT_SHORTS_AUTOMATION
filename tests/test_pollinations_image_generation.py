@@ -58,6 +58,48 @@ class PollinationsImageClientTests(unittest.TestCase):
         self.assertEqual(result["mime_type"], "image/png")
         self.assertEqual(result["provider"], "pollinations")
 
+    def test_generate_text_posts_luna_json_request_and_returns_content(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["authorization"] = request.headers.get("Authorization")
+            captured["payload"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": '{"title":"A Luna story"}'}},
+                    ]
+                },
+            )
+
+        result = self.make_client(handler).generate_text(
+            model="openai/gpt-5.6-luna",
+            prompt="Return a story as JSON.",
+            max_new_tokens=1600,
+            temperature=0.75,
+        )
+
+        self.assertEqual(result, '{"title":"A Luna story"}')
+        self.assertEqual(
+            captured["url"],
+            "https://gen.pollinations.test/v1/chat/completions",
+        )
+        self.assertEqual(captured["authorization"], "Bearer pollinations-test-key")
+        self.assertEqual(
+            captured["payload"],
+            {
+                "model": "openai/gpt-5.6-luna",
+                "messages": [
+                    {"role": "user", "content": "Return a story as JSON."}
+                ],
+                "temperature": 0.75,
+                "max_completion_tokens": 1600,
+                "response_format": {"type": "json_object"},
+            },
+        )
+
     def test_generate_image_maps_429_to_provider_rate_limit(self) -> None:
         def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(

@@ -18,8 +18,9 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 120.0
     allow_placeholder_generation: bool = False
 
-    # Groq generates story scripts, Pollinations generates scene images, and
-    # Gemini generates speech and video.
+    # Pollinations generates story scripts and scene images, while Gemini
+    # generates speech and video. Legacy Groq settings remain available for
+    # compatibility with older worker configurations.
     groq_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("PY_WORKER_GROQ_API_KEY", "GROQ_API_KEY"),
@@ -53,6 +54,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "PY_WORKER_POLLINATIONS_API_KEY",
             "POLLINATIONS_API_KEY",
+        ),
+    )
+    pollinations_text_model: str = Field(
+        default="openai/gpt-5.6-luna",
+        validation_alias=AliasChoices(
+            "PY_WORKER_POLLINATIONS_TEXT_MODEL",
+            "POLLINATIONS_TEXT_MODEL",
         ),
     )
     pollinations_image_model: str = Field(

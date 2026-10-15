@@ -8,6 +8,16 @@ from app.core.config import Settings
 
 
 class GroqSettingsTests(unittest.TestCase):
+    def test_settings_load_pollinations_story_model_with_luna_default(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"POLLINATIONS_API_KEY": "pollinations-env-key"},
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+
+        self.assertEqual(settings.pollinations_text_model, "openai/gpt-5.6-luna")
+
     def test_settings_load_bare_groq_key_and_default_story_model(self) -> None:
         with patch.dict(os.environ, {"GROQ_API_KEY": "groq-env-key"}, clear=True):
             settings = Settings(_env_file=None)
@@ -66,6 +76,7 @@ class ProviderRoutingTests(unittest.TestCase):
         deps.get_llm_service.cache_clear()
         for dependency_name in (
             "get_pollinations_client",
+            "get_pollinations_text_client",
             "get_pollinations_image_generation_service",
         ):
             dependency = getattr(deps, dependency_name, None)
@@ -74,13 +85,15 @@ class ProviderRoutingTests(unittest.TestCase):
         deps.get_image_service.cache_clear()
         deps.get_tts_service.cache_clear()
 
-    def test_llm_service_receives_groq_client_and_model(self) -> None:
+    def test_llm_service_receives_pollinations_text_client_and_luna_model(self) -> None:
         settings = SimpleNamespace(
             groq_model="qwen/qwen3.6-27b",
+            pollinations_text_model="openai/gpt-5.6-luna",
             gemini_model="gemini-story-model",
             allow_placeholder_generation=False,
         )
         groq_client = object()
+        pollinations_text_client = object()
         gemini_client = object()
         deps.get_llm_service.cache_clear()
 
@@ -94,14 +107,39 @@ class ProviderRoutingTests(unittest.TestCase):
             ),
             patch.object(
                 deps,
+                "get_pollinations_text_client",
+                return_value=pollinations_text_client,
+                create=True,
+            ),
+            patch.object(
+                deps,
                 "get_gemini_client",
                 return_value=gemini_client,
             ),
         ):
             service = deps.get_llm_service()
 
-        self.assertIs(service.llm_client, groq_client)
-        self.assertEqual(service.model, "qwen/qwen3.6-27b")
+        self.assertIs(service.llm_client, pollinations_text_client)
+        self.assertEqual(service.model, "openai/gpt-5.6-luna")
+
+    def test_pollinations_text_client_receives_story_key_and_ai_timeout(self) -> None:
+        settings = SimpleNamespace(
+            pollinations_api_key="pollinations-test-key",
+            pollinations_base_url="https://gen.pollinations.test/v1",
+            ai_timeout_seconds=120,
+        )
+
+        with (
+            patch.object(deps, "get_settings", return_value=settings),
+            patch.object(deps, "PollinationsClient", create=True) as client_class,
+        ):
+            deps.get_pollinations_text_client()
+
+        client_class.assert_called_once_with(
+            api_key="pollinations-test-key",
+            base_url="https://gen.pollinations.test/v1",
+            timeout_seconds=120,
+        )
 
     def test_groq_client_receives_configured_fallback_model(self) -> None:
         settings = SimpleNamespace(

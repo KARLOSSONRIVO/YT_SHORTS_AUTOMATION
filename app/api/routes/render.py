@@ -29,7 +29,7 @@ async def render_clip_upload(
     title_hint: str | None = Form(default=None),
     score: float = Form(default=0.0),
     transcript_json: str = Form(...),
-    font_family: str = Form(default="Montserrat ExtraBold"),
+    font_family: str = Form(default="DejaVu Sans"),
     font_size: int = Form(default=64),
     fill_color: str = Form(default="#FFFFFF"),
     stroke_color: str = Form(default="#000000"),

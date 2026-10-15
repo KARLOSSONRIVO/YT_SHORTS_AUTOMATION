@@ -40,6 +40,8 @@ class LLMService:
     def generate_story_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
         if payload.script_framework == "reddit_story" and not (payload.source_text and payload.source_text.strip()):
             raise ValidationError("Original Reddit submission text is required before generating a Reddit story.")
+        if payload.script_framework == "serialized_story" and payload.serialized_story is None:
+            raise ValidationError("Serialized story assignment is required before generating a serialized story episode.")
         try:
             last_response: ScriptGenerationResponse | None = None
             best_response: ScriptGenerationResponse | None = None
@@ -183,6 +185,14 @@ Return a complete revised JSON response, not commentary about the revision.
                 retry_instruction=retry_instruction,
             )
 
+        if payload.script_framework == "serialized_story":
+            return self._build_serialized_story_prompt(
+                payload,
+                target_word_count=target_word_count,
+                duration_instruction=duration_instruction,
+                retry_instruction=retry_instruction,
+            )
+
         if payload.script_framework == "history_story":
             return self._build_history_story_prompt(
                 payload,
@@ -197,6 +207,64 @@ Return a complete revised JSON response, not commentary about the revision.
             duration_instruction=duration_instruction,
             retry_instruction=retry_instruction,
         )
+
+    def _build_serialized_story_prompt(
+        self,
+        payload: ScriptGenerationRequest,
+        *,
+        target_word_count: int,
+        duration_instruction: str,
+        retry_instruction: str,
+    ) -> str:
+        assignment = payload.serialized_story
+        assignment_json = assignment.model_dump_json() if assignment else "{}"
+        return f"""
+You generate original fictional psychological mystery/suspense stories for YouTube Shorts and TikTok.
+Return only valid JSON. Do not wrap it in markdown.
+
+Required JSON shape:
+{{
+  "title": "episode title",
+  "hook": "short punchy opening hook",
+  "narration": "full narration script",
+  "caption_text": "short social caption",
+  "scenes": [
+    {{
+      "scene_index": 1,
+      "narration": "scene narration",
+      "image_prompt": "vertical 9:16 cinematic visual prompt, no text, no logos",
+      "duration_seconds": 6,
+      "caption_text": "short subtitle text"
+    }}
+  ]
+}}
+
+This story is fictional. Never present it as a true event, documentary, confession, or verified account.
+Niche: original psychological mystery/suspense
+Series assignment JSON: {assignment_json}
+Topic: {payload.topic}
+Tone: {payload.tone}
+Language: {payload.language}
+Target duration seconds: {payload.target_duration_seconds}
+Approximate target spoken word count: {target_word_count}
+{duration_instruction}
+Visual style preset: {payload.style_preset}
+Audience: {payload.audience or "viewers who enjoy suspenseful original stories"}
+
+Story rules:
+- Keep the exact series title, premise, setting, character notes, and episode assignment consistent.
+- Start with a concrete impossible detail, danger, discovery, or emotional consequence in the first sentence and first visual.
+- Build one central mystery with a clear question, escalating clues, a reversal or reveal, and a consequence that changes the character.
+- Use sensory details and specific human choices; avoid abstract filler and textbook explanations.
+- Create 6 to 8 visually distinct scenes. Change the visual beat frequently without breaking continuity.
+- Every image prompt must show one specific frozen moment with the same characters and setting where appropriate. Avoid text, logos, watermarks, extra limbs, duplicated people, and UI elements.
+- Do not invent real people, real accusations, real places as factual claims, or real news events.
+- End the story with a complete conclusion scene, then add one separate clean closing scene. Never blend the CTA into the reveal.
+- This is episode {assignment.episode_number if assignment else "?"} of {assignment.episodes_per_series if assignment else "?"}. If a next episode title/topic/promise exists in the assignment, name that exact next episode in the closing scene and say: "Like and subscribe to see what happens next." If this is the final episode, resolve the series and say: "Like and subscribe for more stories like this." Do not tease another episode on a final episode.
+- Do not say "don't miss chapter two", "follow", or "follow for more".
+- Return JSON only.
+{retry_instruction}
+""".strip()
 
     def _build_standard_story_prompt(
         self,
@@ -507,6 +575,32 @@ Rules:
 {retry_instruction}
 """.strip()
 
+    def _safe_scene_duration(
+        self,
+        raw_duration: Any,
+        narration: str,
+        speaking_rate: float,
+    ) -> float:
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            duration = 0.0
+
+        if math.isfinite(duration) and duration > 0:
+            return duration
+
+        word_count = self._narration_word_count(narration)
+        if not word_count:
+            return 6.0
+
+        return max(
+            round(
+                word_count / (self.ESTIMATED_WORDS_PER_SECOND * speaking_rate),
+                2,
+            ),
+            self.MIN_SCENE_DURATION_SECONDS,
+        )
+
     def _parse_response(
         self,
         payload: ScriptGenerationRequest,
@@ -518,7 +612,11 @@ Rules:
                 scene_index=int(scene.get("scene_index", index + 1)),
                 narration=str(scene.get("narration", "")).strip(),
                 image_prompt=str(scene.get("image_prompt", "")).strip(),
-                duration_seconds=float(scene.get("duration_seconds", 6.0)),
+                duration_seconds=self._safe_scene_duration(
+                    scene.get("duration_seconds", 6.0),
+                    str(scene.get("narration", "")).strip(),
+                    payload.speaking_rate,
+                ),
                 caption_text=str(scene.get("caption_text", scene.get("narration", ""))).strip(),
             )
             for index, scene in enumerate(data.get("scenes", []))
@@ -544,6 +642,9 @@ Rules:
             scenes = self._ensure_psychology_truth_scene_lead(hook, scenes)
             if payload.niche_id == self.PSYCHOLOGY_NICHE_ID:
                 scenes = self._ensure_psychology_series_promise(scenes)
+        elif payload.script_framework == "serialized_story":
+            hook = self._normalize_serialized_hook(payload.topic, hook)
+            scenes = self._ensure_psychology_truth_scene_lead(hook, scenes)
 
         scene_narration = " ".join(scene.narration for scene in scenes).strip()
         normalized_top_level_narration = (
@@ -556,6 +657,10 @@ Rules:
             scene_narration = " ".join(scene.narration for scene in scenes).strip()
             if payload.next_story_title:
                 normalized_top_level_narration = scene_narration
+        elif payload.script_framework == "serialized_story":
+            scenes = self._ensure_serialized_story_outro(payload, scenes)
+            scene_narration = " ".join(scene.narration for scene in scenes).strip()
+            normalized_top_level_narration = scene_narration
         narration = self._select_narration_closest_to_target(
             payload,
             normalized_top_level_narration,
@@ -634,9 +739,47 @@ Rules:
         return data
 
     def _generate_placeholder_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
+        if payload.script_framework == "serialized_story":
+            return self._generate_placeholder_serialized_story_script(payload)
         if payload.script_framework == "history_story":
             return self._generate_placeholder_history_script(payload)
         return self._generate_placeholder_psychology_script(payload)
+
+    def _generate_placeholder_serialized_story_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
+        assignment = payload.serialized_story
+        topic = payload.topic.strip()
+        title = topic or "The Door That Should Not Exist"
+        hook = "The room was never built."
+        beats = [
+            hook,
+            f"When Mara found {topic}, she thought it was a mistake, but the clue matched a memory nobody else could remember.",
+            "The first answer made the mystery worse: someone had been leaving signs inside a locked place.",
+            "Then the evidence changed, and Mara realized the person she trusted most had been guiding her toward the truth.",
+            "The final clue exposed the choice that trapped everyone in the story.",
+            "Mara opened the door and finally understood what the silence had been protecting.",
+        ]
+        scenes = [
+            FacelessScene(
+                scene_index=index + 1,
+                narration=beat,
+                image_prompt=f"{payload.style_preset}, vertical 9:16, cinematic fictional mystery scene, {beat.lower()}, no text, no logos",
+                duration_seconds=max(payload.target_duration_seconds / len(beats), 3),
+                caption_text=beat[:140],
+            )
+            for index, beat in enumerate(beats)
+        ]
+        scenes = self._ensure_serialized_story_outro(payload, scenes)
+        narration = " ".join(scene.narration for scene in scenes)
+        return ScriptGenerationResponse(
+            job_id=payload.job_id,
+            project_id=payload.project_id,
+            title=title,
+            hook=hook,
+            narration=narration,
+            scenes=scenes,
+            image_prompts=[scene.image_prompt for scene in scenes],
+            caption_text=hook,
+        )
 
     def _generate_placeholder_history_script(self, payload: ScriptGenerationRequest) -> ScriptGenerationResponse:
         topic = payload.topic.strip()
@@ -954,6 +1097,126 @@ Rules:
         if any(token in lowered for token in ("curiosity gap", "not knowing")):
             return "Why Your Brain Can't Stop Chasing Answers"
         return "Why Your Brain Keeps Doing This"
+
+    def _normalize_serialized_hook(self, topic: str, hook: str) -> str:
+        normalized_hook = re.sub(r"\s+", " ", hook).strip()
+        if normalized_hook:
+            first_sentence = re.split(r"(?<=[.!?])\s+", normalized_hook)[0].strip()
+            if len(first_sentence.split()) <= self.MAX_HISTORY_HOOK_WORDS:
+                return first_sentence
+
+        lowered = topic.lower()
+        if any(token in lowered for token in ("room", "door", "house")):
+            return "That room should not exist."
+        if any(token in lowered for token in ("voice", "missing", "disappear")):
+            return "Someone was hiding the truth."
+        return "The clue changed everything."
+
+    def _ensure_serialized_story_outro(
+        self,
+        payload: ScriptGenerationRequest,
+        scenes: list[FacelessScene],
+    ) -> list[FacelessScene]:
+        assignment = payload.serialized_story
+        if not assignment or not scenes:
+            return scenes
+
+        story_scenes = list(scenes)
+        if len(story_scenes) > 1 and self._is_serialized_story_outro_scene(story_scenes[-1]):
+            story_scenes.pop()
+
+        last_story_scene = story_scenes[-1]
+        story_narration = re.split(
+            r"\b(?:like and subscribe|subscribe|follow)\b.*$",
+            last_story_scene.narration.strip(),
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        if not story_narration:
+            story_narration = "The truth finally surfaced."
+
+        story_scenes[-1] = FacelessScene(
+            scene_index=last_story_scene.scene_index,
+            narration=self._ensure_sentence_ending(story_narration),
+            image_prompt=last_story_scene.image_prompt,
+            duration_seconds=last_story_scene.duration_seconds,
+            caption_text=last_story_scene.caption_text,
+        )
+
+        original_total_duration = sum(
+            max(scene.duration_seconds, self.MIN_SCENE_DURATION_SECONDS)
+            for scene in scenes
+        )
+        outro_duration = 5.0
+        total_duration = max(
+            original_total_duration,
+            len(story_scenes) * self.MIN_SCENE_DURATION_SECONDS + outro_duration,
+        )
+        story_duration_target = total_duration - outro_duration
+        story_duration = sum(
+            max(scene.duration_seconds, self.MIN_SCENE_DURATION_SECONDS)
+            for scene in story_scenes
+        )
+        scale = story_duration_target / story_duration if story_duration else 1.0
+        rebalanced_story_scenes: list[FacelessScene] = []
+        for scene in story_scenes:
+            rebalanced_story_scenes.append(
+                FacelessScene(
+                    scene_index=scene.scene_index,
+                    narration=scene.narration,
+                    image_prompt=scene.image_prompt,
+                    duration_seconds=max(
+                        round(max(scene.duration_seconds, self.MIN_SCENE_DURATION_SECONDS) * scale, 2),
+                        self.MIN_SCENE_DURATION_SECONDS,
+                    ),
+                    caption_text=scene.caption_text,
+                )
+            )
+
+        duration_correction = round(
+            story_duration_target - sum(scene.duration_seconds for scene in rebalanced_story_scenes),
+            2,
+        )
+        if rebalanced_story_scenes:
+            final_story_scene = rebalanced_story_scenes[-1]
+            rebalanced_story_scenes[-1] = FacelessScene(
+                scene_index=final_story_scene.scene_index,
+                narration=final_story_scene.narration,
+                image_prompt=final_story_scene.image_prompt,
+                duration_seconds=max(
+                    round(final_story_scene.duration_seconds + duration_correction, 2),
+                    self.MIN_SCENE_DURATION_SECONDS,
+                ),
+                caption_text=final_story_scene.caption_text,
+            )
+
+        is_final_episode = assignment.episode_number >= assignment.episodes_per_series
+        if is_final_episode:
+            outro_narration = "That story ends here. Like and subscribe for more stories like this."
+            outro_caption = "LIKE & SUBSCRIBE FOR MORE"
+            outro_visual = "dedicated closing visual for a finished original mystery series, quiet aftermath, warm resolving light, clean negative space, no text, no logos"
+        else:
+            next_title = (assignment.next_episode_title or "the next mystery").strip().rstrip(".!?")
+            next_topic = (assignment.next_episode_topic or assignment.next_episode_promise or "the clue waiting in the next episode").strip().rstrip(".!?")
+            outro_narration = (
+                f"The next mystery begins with {next_title}: {next_topic}. "
+                "Like and subscribe to see what happens next."
+            )
+            outro_caption = f"NEXT: {next_title}"
+            outro_visual = f"dedicated closing visual for an original serialized mystery, previewing {next_topic}, cinematic vertical frame, darker edges and clean negative space, no text, no logos"
+
+        outro_scene = FacelessScene(
+            scene_index=max(scene.scene_index for scene in story_scenes) + 1,
+            narration=outro_narration,
+            image_prompt=outro_visual,
+            duration_seconds=outro_duration,
+            caption_text=outro_caption,
+        )
+        return [*rebalanced_story_scenes, outro_scene]
+
+    def _is_serialized_story_outro_scene(self, scene: FacelessScene) -> bool:
+        normalized = self._normalize_text(f"{scene.narration} {scene.caption_text} {scene.image_prompt}")
+        return "like and subscribe" in normalized or "dedicated closing visual for an original serialized mystery" in normalized
 
     def _ensure_psychology_hook_lead(self, hook: str, narration: str) -> str:
         cleaned_narration = narration.strip()

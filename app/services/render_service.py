@@ -8,6 +8,7 @@ from app.schemas.media import MediaMetadata
 from app.schemas.subtitles import SubtitlePreferences
 from app.schemas.transcription import TranscriptResult, TranscriptWord
 from app.schemas.workflow import RenderedClipResult
+from app.utils.subtitle_fonts import resolve_render_font_family
 from app.utils.output_paths import dated_stage_output_dir, output_url
 
 
@@ -398,13 +399,13 @@ class RenderService:
 
         return (
             "Style: Default,"
-            f"{prefs.font_family},"
+            f"{resolve_render_font_family(prefs.font_family)},"
             f"{max(int(prefs.font_size * 0.72), 30)},"
             f"{self._hex_to_ass_color(prefs.fill_color)},"
             f"{self._hex_to_ass_color(prefs.highlight_color)},"
             f"{self._hex_to_ass_color(prefs.stroke_color)},"
             "&H64000000,"
-            "0,0,0,0,100,100,0,0,1,2,0,"
+            "1,0,0,0,100,100,0,0,1,4,1,"
             f"{alignment},80,80,{layout['subtitle_margin_bottom']},1"
         )
 

@@ -9,6 +9,21 @@ class FacelessScene(BaseModel):
     caption_text: str
 
 
+class SerializedStoryAssignment(BaseModel):
+    series_number: int = Field(ge=1)
+    episode_number: int = Field(ge=1)
+    episodes_per_series: int = Field(ge=1, le=12)
+    series_title: str
+    premise: str
+    setting: str
+    character_notes: str
+    episode_objective: str
+    episode_summary: str
+    next_episode_title: str | None = None
+    next_episode_topic: str | None = None
+    next_episode_promise: str | None = None
+
+
 class ScriptGenerationRequest(BaseModel):
     job_id: str
     project_id: str
@@ -27,6 +42,7 @@ class ScriptGenerationRequest(BaseModel):
     script_framework: str = "psychology_truth"
     story_format: str | None = None
     speaking_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    serialized_story: SerializedStoryAssignment | None = None
 
 
 class ScriptGenerationResponse(BaseModel):

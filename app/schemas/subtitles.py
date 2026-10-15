@@ -6,7 +6,7 @@ from app.schemas.transcription import TranscriptResult
 
 
 class SubtitlePreferences(BaseModel):
-    font_family: str = "Bebas Neue"
+    font_family: str = "DejaVu Sans"
     font_size: int = 92
     fill_color: str = "#FFFFFF"
     stroke_color: str = "#000000"

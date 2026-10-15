@@ -82,6 +82,16 @@ def get_pollinations_client() -> PollinationsClient:
 
 
 @lru_cache
+def get_pollinations_text_client() -> PollinationsClient:
+    settings = get_settings()
+    return PollinationsClient(
+        api_key=settings.pollinations_api_key,
+        base_url=settings.pollinations_base_url,
+        timeout_seconds=settings.ai_timeout_seconds,
+    )
+
+
+@lru_cache
 def get_pollinations_image_generation_service() -> PollinationsImageGenerationService:
     settings = get_settings()
     return PollinationsImageGenerationService(
@@ -170,8 +180,8 @@ def get_render_service() -> RenderService:
 def get_llm_service() -> LLMService:
     settings = get_settings()
     return LLMService(
-        llm_client=get_groq_client(),
-        model=settings.groq_model,
+        llm_client=get_pollinations_text_client(),
+        model=settings.pollinations_text_model,
         allow_placeholder_generation=settings.allow_placeholder_generation,
     )
 
